@@ -910,7 +910,7 @@ class ProjectsScreen(Screen):
         Binding("d", "delete_project", "Delete"),
         Binding("e", "toggle_exports", "Exports"),
         Binding("q", "quit", "Quit", show=False),
-        Binding("ctrl+q", "quit", "Quit", show=False),
+        Binding("ctrl+d", "quit", "Quit", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -1207,6 +1207,7 @@ class MarkdownTextArea(TextArea):
     BINDINGS = [
         Binding(b.key, b.action, b.description, show=b.show, system=True)
         for b in TextArea.BINDINGS
+        if b.key not in ("pageup", "pagedown")
     ]
 
     def _build_highlight_map(self) -> None:
@@ -1236,7 +1237,7 @@ class EditorScreen(Screen):
         Binding("ctrl+n", "footnote", "Insert footnote", show=True),
         Binding("ctrl+o", "sources", "Sources", show=True),
         Binding("ctrl+p", "command_palette", "Command palette", show=True),
-        Binding("ctrl+q", "close_project", "Quit to projects", show=True),
+        Binding("ctrl+d", "close_project", "Quit to projects", show=True),
         Binding("ctrl+r", "export_pdf", "Export", show=True),
         Binding("ctrl+s", "save", "Save", show=True),
         Binding("ctrl+v", "noop", "Paste", show=True),
@@ -2236,7 +2237,7 @@ class WriteCommands(Provider):
                 ("Footnote (Ctrl+N)", "Insert footnote", screen.action_footnote),
                 ("Insert frontmatter", "Add YAML frontmatter properties", screen.action_insert_frontmatter),
                 ("Keybindings (Ctrl+H)", "Show keybindings panel", screen.action_toggle_help),
-                ("Quit to projects (Ctrl+Q)", "Save and return to project list", screen.action_close_project),
+                ("Quit to projects (Ctrl+D)", "Save and return to project list", screen.action_close_project),
                 ("Save (Ctrl+S)", "Save document", screen.action_save),
                 ("Sources (Ctrl+O)", "Manage sources", screen.action_sources),
             ]
@@ -2276,7 +2277,7 @@ class WriteApp(App):
 
     COMMANDS = App.COMMANDS | {WriteCommands}
     # Override App.BINDINGS to remove the priority ctrl+q → quit.
-    # Each screen now owns ctrl+q: EditorScreen → close_project,
+    # Each screen now owns ctrl+d: EditorScreen → close_project,
     # ProjectsScreen → quit.
     BINDINGS = []
     TITLE = "write."
@@ -2310,6 +2311,10 @@ class WriteApp(App):
     }
     #editor {
         height: 1fr;
+        border: none;
+        &:focus {
+            border: none;
+        }
     }
     #editor-status {
         dock: bottom;
