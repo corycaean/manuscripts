@@ -30,7 +30,7 @@ from textual import on, work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.command import DiscoveryHit, Hit, Hits, Provider
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, ScrollableContainer, Vertical, VerticalScroll
 from textual.reactive import reactive, var
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
@@ -903,14 +903,13 @@ SOURCE_FIELDS: dict[str, list[tuple[str, str]]] = {
 
 
 class ProjectsScreen(Screen):
-    """Landing screen: list of writing projects + exports toggle."""
+    """Landing screen: list of manuscripts + exports toggle."""
 
     BINDINGS = [
-        Binding("n", "new_project", "New project"),
+        Binding("n", "new_project", "New manuscript"),
         Binding("d", "delete_project", "Delete"),
         Binding("e", "toggle_exports", "Exports"),
         Binding("q", "quit", "Quit", show=False),
-        Binding("ctrl+d", "quit", "Quit", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -944,7 +943,7 @@ class ProjectsScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="projects-view"):
-            yield Static("Projects", id="projects-title")
+            yield Static("Manuscripts", id="projects-title")
             yield OptionList(id="project-list")
             yield Static("(n) New  (d) Delete  (e) Exports", id="projects-hints")
         with Vertical(id="exports-view"):
@@ -967,7 +966,7 @@ class ProjectsScreen(Screen):
                 mod = ""
             ol.add_option(Option(f"{p.name}  ({mod})", id=p.id))
         if not projects:
-            ol.add_option(Option("  No projects yet — press n to create one.", id="__empty__"))
+            ol.add_option(Option("  No manuscripts yet — press n to create one.", id="__empty__"))
 
     def _refresh_exports(self) -> None:
         ol: OptionList = self.query_one("#export-file-list", OptionList)
@@ -1067,7 +1066,7 @@ class ProjectsScreen(Screen):
             app: WriteApp = self.app  # type: ignore[assignment]
             app.storage.delete_project(pid)
             self._refresh_list()
-            self.notify("Project deleted.")
+            self.notify("Manuscript deleted.")
 
     def action_toggle_exports(self) -> None:
         pv = self.query_one("#projects-view")
@@ -1115,8 +1114,8 @@ class NewProjectModal(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="new-project-box"):
-            yield Label("New Project")
-            yield Input(placeholder="Project name…", id="project-name-input")
+            yield Label("New Manuscript")
+            yield Input(placeholder="Manuscript name…", id="project-name-input")
             with Horizontal():
                 yield Button("Create", id="btn-create")
                 yield Button("Cancel", id="btn-cancel")
@@ -1205,10 +1204,14 @@ class MarkdownTextArea(TextArea):
     """
 
     BINDINGS = [
-        Binding(b.key, b.action, b.description, show=b.show, system=True)
-        for b in TextArea.BINDINGS
-        if b.key not in ("pageup", "pagedown")
+        Binding(b.key, b.action, b.description, show=False, system=True)
+        for b in list(TextArea.BINDINGS) + list(ScrollableContainer.BINDINGS)
     ]
+
+    def _on_key(self, event) -> None:
+        if event.key == "escape":
+            return  # Let escape bubble up to the screen
+        super()._on_key(event)
 
     def _build_highlight_map(self) -> None:
         super()._build_highlight_map()
@@ -1221,6 +1224,68 @@ class MarkdownTextArea(TextArea):
                 highlights[i].append((marker_end + 1, len(line), "heading"))
 
 
+class KeybindingsPanel(Static):
+    """Custom keybindings panel with grouped sections."""
+
+    DEFAULT_CSS = """
+    KeybindingsPanel {
+        dock: right;
+        width: 38;
+        height: 1fr;
+        border-left: vkey $foreground 30%;
+        padding: 1 2;
+        overflow-y: auto;
+    }
+    """
+
+    def render(self):
+        from rich.table import Table
+        from rich.text import Text
+
+        key_style = "bold #e0af68"
+        hdr_style = "underline"
+        desc_style = ""
+
+        tbl = Table(
+            show_header=False, box=None, padding=(0, 1), expand=False
+        )
+        tbl.add_column(justify="right", style=key_style, no_wrap=True)
+        tbl.add_column(style=desc_style)
+
+        sections = [
+            ("Management", [
+                ("Ctrl+M", "Return to manuscripts"),
+                ("Ctrl+O", "Manage sources"),
+                ("Ctrl+P", "Invoke command palette"),
+                ("Ctrl+Q", "Quit"),
+                ("Ctrl+S", "Save"),
+            ]),
+            ("Editing", [
+                ("Ctrl+B", "Bold"),
+                ("Ctrl+C", "Copy"),
+                ("Ctrl+I", "Italic"),
+                ("Ctrl+N", "Insert blank footnote"),
+                ("Ctrl+R", "Insert footnote with reference"),
+                ("Ctrl+V", "Paste"),
+                ("Ctrl+Y", "Redo"),
+                ("Ctrl+Z", "Undo"),
+                ("Shift+Arrows", "Select text"),
+            ]),
+            ("Help", [
+                ("Ctrl+H", "Show keybindings"),
+            ]),
+        ]
+
+        for i, (title, bindings) in enumerate(sections):
+            if i > 0:
+                tbl.add_row("", "")
+            tbl.add_row("", Text(title, style=hdr_style))
+            for key, desc in bindings:
+                tbl.add_row(key, desc)
+
+        return tbl
+
+
 class EditorScreen(Screen):
     """The main writing screen."""
 
@@ -1228,23 +1293,21 @@ class EditorScreen(Screen):
         # Hide inherited Screen bindings from keybindings panel
         Binding("tab", "app.focus_next", "Focus Next", show=False, system=True),
         Binding("shift+tab", "app.focus_previous", "Focus Previous", show=False, system=True),
-        # Curated keybindings
-        Binding("ctrl+b", "bold", "Bold", show=True),
-        Binding("ctrl+c", "noop", "Copy", show=True),
-        Binding("ctrl+i", "italic", "Italic", show=True),
-        Binding("ctrl+j", "cite", "Insert citation", show=True),
-        Binding("ctrl+l", "bibliography", "Bibliography", show=True),
-        Binding("ctrl+n", "footnote", "Insert footnote", show=True),
-        Binding("ctrl+o", "sources", "Sources", show=True),
-        Binding("ctrl+p", "command_palette", "Command palette", show=True),
-        Binding("ctrl+d", "close_project", "Quit to projects", show=True),
-        Binding("ctrl+r", "export_pdf", "Export", show=True),
-        Binding("ctrl+s", "save", "Save", show=True),
-        Binding("ctrl+v", "noop", "Paste", show=True),
-        Binding("ctrl+x", "noop", "Cut", show=True),
-        Binding("ctrl+z", "noop", "Undo", show=True),
-        Binding("ctrl+h", "toggle_help", "Keybindings", show=True),
-        Binding("shift+arrows", "noop", "Select text", show=True),
+        # Functional keybindings (all system=True; display handled by KeybindingsPanel)
+        Binding("ctrl+b", "bold", "Bold", system=True),
+        Binding("ctrl+c", "noop", "Copy", system=True),
+        Binding("ctrl+i", "italic", "Italic", system=True),
+        Binding("ctrl+m", "close_project", "Return to manuscripts", system=True),
+        Binding("ctrl+n", "footnote", "Insert blank footnote", system=True),
+        Binding("ctrl+o", "sources", "Sources", system=True),
+        Binding("ctrl+p", "command_palette", "Command Palette", system=True),
+        Binding("ctrl+r", "cite", "Insert reference", system=True),
+        Binding("ctrl+s", "save", "Save", system=True),
+        Binding("ctrl+v", "noop", "Paste", system=True),
+        Binding("ctrl+x", "noop", "Cut", system=True),
+        Binding("ctrl+z", "noop", "Undo", system=True),
+        Binding("ctrl+h", "toggle_help", "Keybindings", system=True),
+        Binding("shift+arrows", "noop", "Select text", system=True),
     ]
 
     AUTO_SAVE_SECONDS = 30.0
@@ -1324,10 +1387,11 @@ class EditorScreen(Screen):
 
     def action_toggle_help(self) -> None:
         """Toggle the keybindings panel."""
-        if self.screen.query("HelpPanel"):
-            self.app.action_hide_help_panel()
+        existing = self.screen.query("KeybindingsPanel")
+        if existing:
+            existing.remove()
         else:
-            self.app.action_show_help_panel()
+            self.screen.mount(KeybindingsPanel())
 
     def action_save(self) -> None:
         self._do_save()
@@ -1546,7 +1610,10 @@ class EditorScreen(Screen):
                 pandoc_args.append("--citeproc")
             pandoc_args.extend(["-o", str(docx_path)])
 
-            self.app.call_from_thread(self.notify, "Converting to DOCX…")
+            if export_format == "pdf":
+                self.app.call_from_thread(self.notify, "Converting to PDF…")
+            else:
+                self.app.call_from_thread(self.notify, "Converting to DOCX…")
 
             result = subprocess.run(
                 pandoc_args, capture_output=True, text=True, timeout=60
@@ -2231,13 +2298,13 @@ class WriteCommands(Provider):
 
         if isinstance(screen, EditorScreen):
             commands = [
-                ("Bibliography (Ctrl+L)", "Insert bibliography from all sources", screen.action_bibliography),
-                ("Cite (Ctrl+J)", "Insert a citation", screen.action_cite),
-                ("Export (Ctrl+R)", "Export document", screen.action_export_pdf),
-                ("Footnote (Ctrl+N)", "Insert footnote", screen.action_footnote),
+                ("Bibliography", "Insert bibliography from all sources", screen.action_bibliography),
+                ("Export", "Export document", screen.action_export_pdf),
+                ("Insert blank footnote (Ctrl+N)", "Insert footnote", screen.action_footnote),
                 ("Insert frontmatter", "Add YAML frontmatter properties", screen.action_insert_frontmatter),
+                ("Insert reference (Ctrl+R)", "Insert a reference", screen.action_cite),
                 ("Keybindings (Ctrl+H)", "Show keybindings panel", screen.action_toggle_help),
-                ("Quit to projects (Ctrl+D)", "Save and return to project list", screen.action_close_project),
+                ("Return to manuscripts (Ctrl+M)", "Save and return to manuscripts", screen.action_close_project),
                 ("Save (Ctrl+S)", "Save document", screen.action_save),
                 ("Sources (Ctrl+O)", "Manage sources", screen.action_sources),
             ]
@@ -2248,7 +2315,7 @@ class WriteCommands(Provider):
         elif isinstance(screen, ProjectsScreen):
             commands = [
                 ("Exports (e)", "Toggle exports view", screen.action_toggle_exports),
-                ("New project (n)", "Create a new project", screen.action_new_project),
+                ("New manuscript (n)", "Create a new manuscript", screen.action_new_project),
                 ("Quit (q)", "Quit the application", screen.action_quit),
             ]
 
@@ -2276,10 +2343,12 @@ class WriteApp(App):
     """write. — a writing appliance for students."""
 
     COMMANDS = App.COMMANDS | {WriteCommands}
-    # Override App.BINDINGS to remove the priority ctrl+q → quit.
-    # Each screen now owns ctrl+d: EditorScreen → close_project,
-    # ProjectsScreen → quit.
-    BINDINGS = []
+    # Override App.BINDINGS so ctrl+q and the command palette don't leak
+    # into the keybindings panel.  EditorScreen has its own ctrl+p binding.
+    BINDINGS = [
+        Binding("ctrl+p", "command_palette", "Command Palette", show=False, system=True),
+        Binding("ctrl+q", "quit", "Quit", show=False, system=True),
+    ]
     TITLE = "write."
     CSS = """
     Screen {
@@ -2331,24 +2400,8 @@ class WriteApp(App):
         self.projects: list[Project] = []
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
-        """Keep only Quit and Keybindings (renamed from Keys)."""
-        yield SystemCommand(
-            "Quit",
-            "Quit the application",
-            self.action_quit,
-        )
-        if screen.query("HelpPanel"):
-            yield SystemCommand(
-                "Keybindings",
-                "Hide the keybindings panel",
-                self.action_hide_help_panel,
-            )
-        else:
-            yield SystemCommand(
-                "Keybindings",
-                "Show keybindings for the focused widget",
-                self.action_show_help_panel,
-            )
+        """Suppress default system commands; WriteCommands handles everything."""
+        return []
 
     def on_mount(self) -> None:
         self.push_screen(ProjectsScreen())
