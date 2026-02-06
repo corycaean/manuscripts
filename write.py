@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scribe — A writing appliance for students.
+write. — A writing appliance for students.
 
 A Markdown editor with integrated source management, Chicago citation
 insertion, and PDF export.  Built on Textual.
@@ -202,7 +202,7 @@ class Storage:
     def __init__(self, base: Path) -> None:
         self.base = base
         self.projects_dir = base / "projects"
-        self.exports_dir = base / "exports"
+        self.exports_dir = Path.home() / "Documents"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -246,7 +246,7 @@ class Storage:
 # ════════════════════════════════════════════════════════════════════════
 
 _REFS_DIR = Path(__file__).resolve().parent / "refs"
-_DEFAULT_REF = "double"
+_DEFAULT_SPACING = "double"
 
 
 def parse_yaml_frontmatter(content: str) -> dict:
@@ -271,13 +271,13 @@ def resolve_reference_doc(yaml: dict) -> Optional[Path]:
     """Return path to the reference .docx for pandoc, or None."""
     if not _REFS_DIR.is_dir():
         return None
-    # Explicit ref: field
-    if yaml.get("ref"):
-        p = _REFS_DIR / (yaml["ref"] + ".docx")
+    # Explicit spacing: field
+    if yaml.get("spacing"):
+        p = _REFS_DIR / (yaml["spacing"] + ".docx")
         if p.exists():
             return p
     # Default
-    p = _REFS_DIR / (_DEFAULT_REF + ".docx")
+    p = _REFS_DIR / (_DEFAULT_SPACING + ".docx")
     if p.exists():
         return p
     # Any .docx
@@ -679,11 +679,11 @@ end"""
 
 
 def _generate_lua_filter(yaml: dict) -> str:
-    """Dispatch to the right Lua filter based on format: field."""
-    fmt = yaml.get("format", "")
-    if fmt == "coverpage":
+    """Dispatch to the right Lua filter based on style: field."""
+    fmt = yaml.get("style", "")
+    if fmt == "chicago":
         return _lua_coverpage_filter(yaml)
-    if fmt == "header":
+    if fmt == "mla":
         return _lua_header_filter(yaml)
     return _lua_basic_filter()
 
@@ -711,9 +711,9 @@ _EMPTY_FOOTER_XML = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 
 def _postprocess_docx(docx_path: str, yaml: dict) -> None:
     """Strip headers/footers and replace {{LASTNAME}} in DOCX zip."""
-    fmt = yaml.get("format", "")
-    strip_headers = fmt != "header"  # strip for coverpage or blank
-    strip_footers = fmt == "header"  # strip only for header format
+    fmt = yaml.get("style", "")
+    strip_headers = fmt != "mla"  # strip for chicago or blank
+    strip_footers = fmt == "mla"  # strip only for mla format
 
     # Determine lastname replacement
     author = yaml.get("author", "")
@@ -819,7 +819,7 @@ class ProjectsScreen(Screen):
     BINDINGS = [
         Binding("n", "new_project", "New project"),
         Binding("d", "delete_project", "Delete"),
-        Binding("q", "quit", "Quit"),
+        Binding("q", "quit", "Quit", show=False),
     ]
 
     def compose(self) -> ComposeResult:
@@ -832,7 +832,7 @@ class ProjectsScreen(Screen):
     def _refresh_list(self) -> None:
         ol: OptionList = self.query_one("#project-list", OptionList)
         ol.clear_options()
-        app: ScribeApp = self.app  # type: ignore[assignment]
+        app: WriteApp = self.app  # type: ignore[assignment]
         projects = app.storage.list_projects()
         app.projects = projects
         for p in projects:
@@ -848,7 +848,7 @@ class ProjectsScreen(Screen):
     def open_project(self, event: OptionList.OptionSelected) -> None:
         if event.option_id == "__empty__":
             return
-        app: ScribeApp = self.app  # type: ignore[assignment]
+        app: WriteApp = self.app  # type: ignore[assignment]
         project = app.storage.load_project(event.option_id)
         if project:
             app.push_screen(EditorScreen(project))
@@ -858,14 +858,14 @@ class ProjectsScreen(Screen):
 
     def _on_project_created(self, name: str | None) -> None:
         if name:
-            app: ScribeApp = self.app  # type: ignore[assignment]
+            app: WriteApp = self.app  # type: ignore[assignment]
             project = app.storage.create_project(name)
             app.push_screen(EditorScreen(project))
 
     def action_delete_project(self) -> None:
         ol: OptionList = self.query_one("#project-list", OptionList)
         idx = ol.highlighted
-        app: ScribeApp = self.app  # type: ignore[assignment]
+        app: WriteApp = self.app  # type: ignore[assignment]
         if idx is not None and idx < len(app.projects):
             project = app.projects[idx]
             self.app.push_screen(
@@ -875,7 +875,7 @@ class ProjectsScreen(Screen):
 
     def _do_delete(self, ok: bool, pid: str) -> None:
         if ok:
-            app: ScribeApp = self.app  # type: ignore[assignment]
+            app: WriteApp = self.app  # type: ignore[assignment]
             app.storage.delete_project(pid)
             self._refresh_list()
             self.notify("Project deleted.")
@@ -908,7 +908,7 @@ class NewProjectModal(ModalScreen[str | None]):
     }
     """
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def compose(self) -> ComposeResult:
         with Vertical(id="new-project-box"):
@@ -960,7 +960,7 @@ class ConfirmModal(ModalScreen[bool]):
         margin-bottom: 1;
     }
     """
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def __init__(self, question: str) -> None:
         super().__init__()
@@ -1011,8 +1011,8 @@ class EditorScreen(Screen):
     """The main writing screen."""
 
     BINDINGS = [
-        Binding("ctrl+s", "save", "Save"),
-        Binding("ctrl+q", "close_project", "Close"),
+        Binding("ctrl+s", "save", "Save", show=False),
+        Binding("ctrl+q", "close_project", "Close", show=False),
         Binding("ctrl+j", "cite", "Cite"),
         Binding("ctrl+n", "footnote", "Footnote"),
         Binding("ctrl+b", "bold", "Bold"),
@@ -1081,7 +1081,7 @@ class EditorScreen(Screen):
         self._do_save(notify=False)
 
     def _do_save(self, notify: bool = True) -> None:
-        app: ScribeApp = self.app  # type: ignore[assignment]
+        app: WriteApp = self.app  # type: ignore[assignment]
         self.project.content = self.query_one("#editor", TextArea).text
         app.storage.save_project(self.project)
         if notify:
@@ -1158,19 +1158,74 @@ class EditorScreen(Screen):
 
     def _on_sources_closed(self, _result: None) -> None:
         # Reload project in case sources changed
-        app: ScribeApp = self.app  # type: ignore[assignment]
+        app: WriteApp = self.app  # type: ignore[assignment]
         reloaded = app.storage.load_project(self.project.id)
         if reloaded:
             self.project = reloaded
 
+    # ── YAML frontmatter insertion ──────────────────────────────────
+
+    def _insert_yaml_property(self, prop: str) -> None:
+        ta = self.query_one("#editor", TextArea)
+        text = ta.text
+        prop_line = f"{prop}: "
+        m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
+        if m:
+            for line in m.group(1).split("\n"):
+                if line.startswith(prop + ":"):
+                    self.notify(f"'{prop}' already in frontmatter.", severity="warning")
+                    return
+            end_pos = m.end(1)
+            new_text = text[:end_pos] + "\n" + prop_line + text[end_pos:]
+        else:
+            new_text = f"---\n{prop_line}\n---\n" + text
+        ta.clear()
+        ta.insert(new_text)
+
+    def action_insert_author(self) -> None:
+        self._insert_yaml_property("author")
+
+    def action_insert_title(self) -> None:
+        self._insert_yaml_property("title")
+
+    def action_insert_instructor(self) -> None:
+        self._insert_yaml_property("instructor")
+
+    def action_insert_date(self) -> None:
+        self._insert_yaml_property("date")
+
+    def action_insert_spacing(self) -> None:
+        self._insert_yaml_property("spacing")
+
+    def action_insert_style(self) -> None:
+        self._insert_yaml_property("style")
+
+    # ── Export ───────────────────────────────────────────────────────
+
     def action_export_pdf(self) -> None:
         self._do_save(notify=False)
-        self._run_export()
+        self.app.push_screen(
+            ExportFormatModal(),
+            callback=self._on_export_format_chosen,
+        )
+
+    def _on_export_format_chosen(self, fmt: str | None) -> None:
+        if fmt:
+            self._run_export(fmt)
 
     @work(thread=True)
-    def _run_export(self) -> None:
-        app: ScribeApp = self.app  # type: ignore[assignment]
+    def _run_export(self, export_format: str = "pdf") -> None:
+        app: WriteApp = self.app  # type: ignore[assignment]
         export_dir = app.storage.exports_dir
+        safe_name = re.sub(r'[^\w\s-]', '', self.project.name).strip().replace(' ', '_')[:50] or "export"
+
+        # Markdown-only export — no external tools needed
+        if export_format == "md":
+            out = export_dir / f"{safe_name}.md"
+            with open(out, "w") as f:
+                f.write(self.project.content)
+            self.app.call_from_thread(self.notify, f"Exported to {out}")
+            return
 
         # 1. Parse YAML frontmatter
         yaml = parse_yaml_frontmatter(self.project.content)
@@ -1180,19 +1235,22 @@ class EditorScreen(Screen):
         if not pandoc:
             self.app.call_from_thread(
                 self.notify,
-                "Pandoc not found. Install pandoc for PDF export.",
+                "Pandoc not found. Install pandoc for export.",
                 severity="warning",
             )
             return
 
-        libreoffice = detect_libreoffice()
-        if not libreoffice:
-            self.app.call_from_thread(
-                self.notify,
-                "LibreOffice not found. Install LibreOffice for PDF export.",
-                severity="warning",
-            )
-            return
+        if export_format == "pdf":
+            libreoffice = detect_libreoffice()
+            if not libreoffice:
+                self.app.call_from_thread(
+                    self.notify,
+                    "LibreOffice not found. Install LibreOffice for PDF export.",
+                    severity="warning",
+                )
+                return
+        else:
+            libreoffice = None
 
         # 3. Resolve reference doc
         ref_doc = resolve_reference_doc(yaml)
@@ -1207,11 +1265,11 @@ class EditorScreen(Screen):
         # Temp file paths
         md_path = export_dir / f"{self.project.id}.md"
         lua_path = export_dir / f"{self.project.id}_filter.lua"
-        docx_path = export_dir / f"{self.project.id}.docx"
-        pdf_path = export_dir / f"{self.project.id}.pdf"
+        docx_path = export_dir / f"{safe_name}.docx"
+        pdf_path = export_dir / f"{safe_name}.pdf"
 
         try:
-            # 4. Write content as-is (student's own YAML is already in content)
+            # 4. Write content
             with open(md_path, "w") as f:
                 f.write(self.project.content)
 
@@ -1249,9 +1307,13 @@ class EditorScreen(Screen):
             try:
                 _postprocess_docx(str(docx_path), yaml)
             except Exception:
-                pass  # continue to PDF even if post-processing fails
+                pass
 
-            # 8. Run LibreOffice
+            if export_format == "docx":
+                self.app.call_from_thread(self.notify, f"Exported to {docx_path}")
+                return
+
+            # 8. Run LibreOffice (PDF only)
             lo_args = [
                 libreoffice,
                 "--headless",
@@ -1270,10 +1332,7 @@ class EditorScreen(Screen):
                 )
                 return
 
-            # 9. Notify success
-            self.app.call_from_thread(
-                self.notify, f"Exported to {pdf_path}"
-            )
+            self.app.call_from_thread(self.notify, f"Exported to {pdf_path}")
 
         except subprocess.TimeoutExpired:
             self.app.call_from_thread(
@@ -1286,13 +1345,62 @@ class EditorScreen(Screen):
                 severity="error",
             )
         finally:
-            # 10. Clean up intermediate files
-            for p in (md_path, lua_path, docx_path):
+            # Clean up intermediate files (keep the final output)
+            cleanup = [md_path, lua_path]
+            if export_format == "pdf":
+                cleanup.append(docx_path)
+            for p in cleanup:
                 try:
                     if p.exists():
                         p.unlink()
                 except OSError:
                     pass
+
+
+# ── Export format modal ───────────────────────────────────────────────
+
+
+class ExportFormatModal(ModalScreen[str | None]):
+    """Pick an export format: PDF, DOCX, or Markdown."""
+
+    DEFAULT_CSS = """
+    ExportFormatModal {
+        align: center middle;
+    }
+    #export-box {
+        width: 40;
+        height: auto;
+        max-height: 12;
+        border: solid #444;
+        background: $surface;
+        padding: 1 2;
+    }
+    #export-box Label {
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="export-box"):
+            yield Label("Export as")
+            yield OptionList(
+                Option("PDF (.pdf)", id="pdf"),
+                Option("Word (.docx)", id="docx"),
+                Option("Markdown (.md)", id="md"),
+                id="export-options",
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#export-options", OptionList).focus()
+
+    @on(OptionList.OptionSelected, "#export-options")
+    def _select(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option_id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 # ── Citation picker modal ─────────────────────────────────────────────
@@ -1321,7 +1429,7 @@ class CitePickerModal(ModalScreen[str | None]):
     }
     """
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def __init__(self, sources: list[Source]) -> None:
         super().__init__()
@@ -1410,7 +1518,7 @@ class SourcesModal(ModalScreen[None]):
     BINDINGS = [
         Binding("a", "add_source", "Add"),
         Binding("d", "delete_source", "Delete"),
-        Binding("escape", "close", "Close"),
+        Binding("escape", "close", "Close", show=False),
     ]
 
     def __init__(self, project: Project) -> None:
@@ -1462,7 +1570,7 @@ class SourcesModal(ModalScreen[None]):
     def _on_source_added(self, source: Source | None) -> None:
         if source:
             self.project.add_source(source)
-            app: ScribeApp = self.app  # type: ignore[assignment]
+            app: WriteApp = self.app  # type: ignore[assignment]
             app.storage.save_project(self.project)
             self._refresh_list()
             self.notify(f"Added: {source.author}")
@@ -1474,7 +1582,7 @@ class SourcesModal(ModalScreen[None]):
         if idx is not None and idx < len(sources):
             s = sources[idx]
             self.project.remove_source(s.id)
-            app: ScribeApp = self.app  # type: ignore[assignment]
+            app: WriteApp = self.app  # type: ignore[assignment]
             app.storage.save_project(self.project)
             self._refresh_list()
             self.notify("Source deleted.")
@@ -1528,7 +1636,7 @@ class SourceFormModal(ModalScreen[Source | None]):
     }
     """
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def __init__(self) -> None:
         super().__init__()
@@ -1625,7 +1733,7 @@ class SourceFormModal(ModalScreen[Source | None]):
 # ════════════════════════════════════════════════════════════════════════
 
 
-class ScribeCommands(Provider):
+class WriteCommands(Provider):
     """Expose editor actions in the command palette."""
 
     def _get_commands(self):
@@ -1636,12 +1744,18 @@ class ScribeCommands(Provider):
             ("Cite", "Insert a citation (Ctrl+J)", screen.action_cite),
             ("Bibliography", "Insert bibliography from all sources", screen.action_bibliography),
             ("Sources", "Manage sources", screen.action_sources),
-            ("Export PDF", "Export document to PDF", screen.action_export_pdf),
+            ("Export", "Export document", screen.action_export_pdf),
+            ("Insert author", "Add author to frontmatter", screen.action_insert_author),
+            ("Insert title", "Add title to frontmatter", screen.action_insert_title),
+            ("Insert instructor", "Add instructor to frontmatter", screen.action_insert_instructor),
+            ("Insert date", "Add date to frontmatter", screen.action_insert_date),
+            ("Insert spacing", "Add spacing to frontmatter", screen.action_insert_spacing),
+            ("Insert style", "Add style to frontmatter", screen.action_insert_style),
         ]
 
     async def discover(self) -> Hits:
         for name, help_text, callback in self._get_commands():
-            yield DiscoveryHit(name, callback, help=help_text)
+            yield Hit(1.0, name, callback, help=help_text)
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
@@ -1656,11 +1770,11 @@ class ScribeCommands(Provider):
 # ════════════════════════════════════════════════════════════════════════
 
 
-class ScribeApp(App):
-    """Scribe — a writing appliance for students."""
+class WriteApp(App):
+    """write. — a writing appliance for students."""
 
-    COMMANDS = App.COMMANDS | {ScribeCommands}
-    TITLE = "Scribe"
+    COMMANDS = App.COMMANDS | {WriteCommands}
+    TITLE = "write."
     CSS = """
     Screen {
         background: #1a1a2e;
@@ -1700,12 +1814,12 @@ class ScribeApp(App):
 
 
 def main() -> None:
-    if os.environ.get("SCRIBE_DATA"):
-        data_dir = Path(os.environ["SCRIBE_DATA"])
+    if os.environ.get("WRITE_DATA"):
+        data_dir = Path(os.environ["WRITE_DATA"])
     else:
-        data_dir = Path.home() / ".scribe"
+        data_dir = Path.home() / ".write"
 
-    app = ScribeApp(data_dir)
+    app = WriteApp(data_dir)
     app.run()
 
 

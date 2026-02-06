@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for Scribe data models and citation formatting.
+Tests for write. data models and citation formatting.
 """
 
 import json
@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
-from scribe import (
+from write import (
     Source, Project, Storage, fuzzy_filter,
     parse_yaml_frontmatter, resolve_reference_doc,
     detect_pandoc, detect_libreoffice,
@@ -217,13 +217,13 @@ def test_parse_yaml_frontmatter():
 
 def test_resolve_reference_doc():
     with tempfile.TemporaryDirectory() as tmpdir:
-        import scribe
-        orig_refs = scribe._REFS_DIR
+        import write
+        orig_refs = write._REFS_DIR
 
         # Create a fake refs dir
         fake_refs = Path(tmpdir) / "refs"
         fake_refs.mkdir()
-        scribe._REFS_DIR = fake_refs
+        write._REFS_DIR = fake_refs
 
         try:
             # No docs at all
@@ -239,18 +239,18 @@ def test_resolve_reference_doc():
 
             # Explicit ref
             (fake_refs / "single.docx").write_bytes(b"fake")
-            result = resolve_reference_doc({"ref": "single"})
+            result = resolve_reference_doc({"spacing": "single"})
             assert result is not None
             assert result.name == "single.docx"
-            print("  Explicit ref OK")
+            print("  Explicit spacing OK")
 
-            # Explicit ref that doesn't exist falls back to default
-            result = resolve_reference_doc({"ref": "nonexistent"})
+            # Explicit spacing that doesn't exist falls back to default
+            result = resolve_reference_doc({"spacing": "nonexistent"})
             assert result is not None
             assert result.name == "double.docx"
-            print("  Missing explicit ref fallback OK")
+            print("  Missing explicit spacing fallback OK")
         finally:
-            scribe._REFS_DIR = orig_refs
+            write._REFS_DIR = orig_refs
 
 
 def test_lua_filter_generation():
@@ -262,7 +262,7 @@ def test_lua_filter_generation():
     print("  Basic filter OK")
 
     # Coverpage filter
-    yaml = {"title": "Test", "author": "Smith", "format": "coverpage"}
+    yaml = {"title": "Test", "author": "Smith", "style": "chicago"}
     cover = _lua_coverpage_filter(yaml)
     assert "function Header" in cover
     assert "function Meta" in cover
@@ -272,7 +272,7 @@ def test_lua_filter_generation():
     print("  Coverpage filter OK")
 
     # Header filter
-    yaml2 = {"title": "Essay", "author": "Doe", "format": "header"}
+    yaml2 = {"title": "Essay", "author": "Doe", "style": "mla"}
     header = _lua_header_filter(yaml2)
     assert "function Header" in header
     assert "function Meta" in header
@@ -281,8 +281,8 @@ def test_lua_filter_generation():
     print("  Header filter OK")
 
     # Dispatcher
-    assert _generate_lua_filter({"format": "coverpage"}) == _lua_coverpage_filter({})
-    assert _generate_lua_filter({"format": "header"}) == _lua_header_filter({})
+    assert _generate_lua_filter({"style": "chicago"}) == _lua_coverpage_filter({})
+    assert _generate_lua_filter({"style": "mla"}) == _lua_header_filter({})
     assert _generate_lua_filter({}) == _lua_basic_filter()
     print("  Dispatcher OK")
 
@@ -306,7 +306,7 @@ def test_postprocess_docx():
             zf.writestr("word/document.xml", b"<w:document/>")
 
         # Test coverpage format: strips headers, keeps footers, replaces lastname
-        _postprocess_docx(docx_path, {"author": "John Smith", "format": "coverpage"})
+        _postprocess_docx(docx_path, {"author": "John Smith", "style": "chicago"})
         with zipfile.ZipFile(docx_path, "r") as zf:
             header = zf.read("word/header1.xml").decode("utf-8")
             footer = zf.read("word/footer1.xml").decode("utf-8")
@@ -325,7 +325,7 @@ def test_postprocess_docx():
             zf.writestr("word/document.xml", b"<w:document/>")
 
         # Test header format: keeps headers (with replacement), strips footers
-        _postprocess_docx(docx_path, {"author": "Jane Doe", "format": "header"})
+        _postprocess_docx(docx_path, {"author": "Jane Doe", "style": "mla"})
         with zipfile.ZipFile(docx_path, "r") as zf:
             header = zf.read("word/header1.xml").decode("utf-8")
             footer = zf.read("word/footer1.xml").decode("utf-8")
@@ -342,7 +342,7 @@ def test_postprocess_docx():
             zf.writestr("word/header1.xml", header_xml)
             zf.writestr("word/document.xml", b"<w:document/>")
 
-        _postprocess_docx(docx_path, {"format": "header"})
+        _postprocess_docx(docx_path, {"style": "mla"})
         with zipfile.ZipFile(docx_path, "r") as zf:
             header = zf.read("word/header1.xml").decode("utf-8")
             # No author: placeholder removed, not replaced
