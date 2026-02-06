@@ -82,8 +82,8 @@ class Source:
         a = self._author_first()
         if self.source_type == "book":
             c = f"{a}, *{self.title}*"
-            if self.city and self.publisher:
-                c += f" ({self.city}: {self.publisher}, {self.year})"
+            if self.publisher:
+                c += f" ({self.publisher}, {self.year})"
             elif self.year:
                 c += f" ({self.year})"
             if page:
@@ -117,8 +117,8 @@ class Source:
         a = self._author_last()
         if self.source_type == "book":
             c = f"{a}. *{self.title}*."
-            if self.city and self.publisher:
-                c += f" {self.city}: {self.publisher}, {self.year}."
+            if self.publisher:
+                c += f" {self.publisher}, {self.year}."
             elif self.year:
                 c += f" {self.year}."
             return c
@@ -325,12 +325,41 @@ def detect_libreoffice() -> Optional[str]:
 # ── Lua filter generators ─────────────────────────────────────────────
 
 
+def _lua_bib_entry_xml() -> str:
+    """Lua snippet: convert a Para block to a hanging-indent OpenXML raw block."""
+    return """
+local function bib_entry_block(block)
+  local text = pandoc.utils.stringify(block)
+  return pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:after="0" w:line="480" w:lineRule="auto"/>
+    <w:ind w:left="720" w:hanging="720"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], text))
+end
+
+local function is_bib_heading(block)
+  if block.t ~= "Header" then return false end
+  local text = pandoc.utils.stringify(block)
+  return text:match("Bibliography") or text:match("References") or text:match("Works Cited")
+end
+"""
+
+
 def _lua_basic_filter() -> str:
-    """Page break before Bibliography/References/Works Cited headings."""
-    return """function Header(el)
-  local text = pandoc.utils.stringify(el)
-  if text:match("Bibliography") or text:match("References") or text:match("Works Cited") then
-    return pandoc.RawBlock('openxml', string.format([[
+    """Page break before Bibliography heading + hanging indent for entries."""
+    return _lua_bib_entry_xml() + """
+function Pandoc(doc)
+  local new_blocks = {}
+  local in_bib = false
+  for i, block in ipairs(doc.blocks) do
+    if is_bib_heading(block) then
+      in_bib = true
+      table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
 <w:p>
   <w:pPr>
     <w:pStyle w:val="Heading%d"/>
@@ -339,9 +368,18 @@ def _lua_basic_filter() -> str:
   <w:r>
     <w:t>%s</w:t>
   </w:r>
-</w:p>]], el.level, text))
+</w:p>]], block.level, pandoc.utils.stringify(block))))
+    elseif in_bib and block.t == "Header" then
+      in_bib = false
+      table.insert(new_blocks, block)
+    elseif in_bib and block.t == "Para" then
+      table.insert(new_blocks, bib_entry_block(block))
+    else
+      table.insert(new_blocks, block)
+    end
   end
-  return el
+  doc.blocks = new_blocks
+  return doc
 end"""
 
 
@@ -353,7 +391,7 @@ def _lua_coverpage_filter(yaml: dict) -> str:
     instructor = yaml.get("instructor", "").replace('"', '\\"')
     date = yaml.get("date", "").replace('"', '\\"')
 
-    return f"""-- Cover page format (Turabian style)
+    return _lua_bib_entry_xml() + f"""-- Cover page format (Turabian style)
 local meta_title = "{title}"
 local meta_author = "{author}"
 local meta_course = "{course}"
@@ -373,23 +411,6 @@ local function format_date(date_str)
     end
   end
   return date_str
-end
-
-function Header(el)
-  local text = pandoc.utils.stringify(el)
-  if text:match("Bibliography") or text:match("References") or text:match("Works Cited") then
-    return pandoc.RawBlock('openxml', string.format([[
-<w:p>
-  <w:pPr>
-    <w:pStyle w:val="Heading%d"/>
-    <w:pageBreakBefore/>
-  </w:pPr>
-  <w:r>
-    <w:t>%s</w:t>
-  </w:r>
-</w:p>]], el.level, text))
-  end
-  return el
 end
 
 function Meta(meta)
@@ -497,26 +518,49 @@ function Pandoc(doc)
   end
 
   local page_break_inserted = false
+  local in_bib = false
   for i, block in ipairs(doc.blocks) do
-    if not page_break_inserted then
-      if block.t == "Header" or
-         (block.t == "Para" and #block.content > 0) or
-         block.t == "CodeBlock" or
-         block.t == "BulletList" or
-         block.t == "OrderedList" or
-         block.t == "Table" or
-         block.t == "BlockQuote" or
-         block.t == "RawBlock" then
-        table.insert(new_blocks, pandoc.RawBlock('openxml', [[
+    if is_bib_heading(block) then
+      in_bib = true
+      if not page_break_inserted then
+        page_break_inserted = true
+      end
+      table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:pStyle w:val="Heading%d"/>
+    <w:pageBreakBefore/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], block.level, pandoc.utils.stringify(block))))
+    elseif in_bib and block.t == "Header" then
+      in_bib = false
+      table.insert(new_blocks, block)
+    elseif in_bib and block.t == "Para" then
+      table.insert(new_blocks, bib_entry_block(block))
+    else
+      if not page_break_inserted then
+        if block.t == "Header" or
+           (block.t == "Para" and #block.content > 0) or
+           block.t == "CodeBlock" or
+           block.t == "BulletList" or
+           block.t == "OrderedList" or
+           block.t == "Table" or
+           block.t == "BlockQuote" or
+           block.t == "RawBlock" then
+          table.insert(new_blocks, pandoc.RawBlock('openxml', [[
 <w:p>
   <w:pPr>
     <w:pageBreakBefore/>
   </w:pPr>
 </w:p>]]))
-        page_break_inserted = true
+          page_break_inserted = true
+        end
       end
+      table.insert(new_blocks, block)
     end
-    table.insert(new_blocks, block)
   end
 
   if not page_break_inserted then
@@ -541,7 +585,7 @@ def _lua_header_filter(yaml: dict) -> str:
     instructor = yaml.get("instructor", "").replace('"', '\\"')
     date = yaml.get("date", "").replace('"', '\\"')
 
-    return f"""-- MLA Header format
+    return _lua_bib_entry_xml() + f"""-- MLA Header format
 local meta_title = "{title}"
 local meta_author = "{author}"
 local meta_course = "{course}"
@@ -561,23 +605,6 @@ local function format_date(date_str)
     end
   end
   return date_str
-end
-
-function Header(el)
-  local text = pandoc.utils.stringify(el)
-  if text:match("Bibliography") or text:match("References") or text:match("Works Cited") then
-    return pandoc.RawBlock('openxml', string.format([[
-<w:p>
-  <w:pPr>
-    <w:pStyle w:val="Heading%d"/>
-    <w:pageBreakBefore/>
-  </w:pPr>
-  <w:r>
-    <w:t>%s</w:t>
-  </w:r>
-</w:p>]], el.level, text))
-  end
-  return el
 end
 
 function Meta(meta)
@@ -669,8 +696,28 @@ function Pandoc(doc)
 </w:p>]], meta_title)))
   end
 
+  local in_bib = false
   for i, block in ipairs(doc.blocks) do
-    table.insert(new_blocks, block)
+    if is_bib_heading(block) then
+      in_bib = true
+      table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:pStyle w:val="Heading%d"/>
+    <w:pageBreakBefore/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], block.level, pandoc.utils.stringify(block))))
+    elseif in_bib and block.t == "Header" then
+      in_bib = false
+      table.insert(new_blocks, block)
+    elseif in_bib and block.t == "Para" then
+      table.insert(new_blocks, bib_entry_block(block))
+    else
+      table.insert(new_blocks, block)
+    end
   end
 
   doc.blocks = new_blocks
@@ -783,7 +830,6 @@ SOURCE_FIELDS: dict[str, list[tuple[str, str]]] = {
         ("title", "Title"),
         ("year", "Year"),
         ("publisher", "Publisher"),
-        ("city", "City"),
     ],
     "article": [
         ("author", "Author (Last, First)"),
@@ -814,17 +860,45 @@ SOURCE_FIELDS: dict[str, list[tuple[str, str]]] = {
 
 
 class ProjectsScreen(Screen):
-    """Landing screen: list of writing projects."""
+    """Landing screen: list of writing projects + exports toggle."""
 
     BINDINGS = [
         Binding("n", "new_project", "New project"),
         Binding("d", "delete_project", "Delete"),
+        Binding("e", "toggle_exports", "Exports"),
         Binding("q", "quit", "Quit", show=False),
     ]
 
+    DEFAULT_CSS = """
+    #projects-view {
+        height: 1fr;
+    }
+    #exports-view {
+        height: 1fr;
+        display: none;
+    }
+    #exports-title {
+        color: #e0e0e0;
+        padding: 1 2;
+    }
+    #export-file-list {
+        margin: 1 2;
+        height: 1fr;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._showing_exports = False
+        self._export_paths: list[Path] = []
+
     def compose(self) -> ComposeResult:
-        yield Static("Projects", id="projects-title")
-        yield OptionList(id="project-list")
+        with Vertical(id="projects-view"):
+            yield Static("Projects", id="projects-title")
+            yield OptionList(id="project-list")
+        with Vertical(id="exports-view"):
+            yield Static("Exports", id="exports-title")
+            yield OptionList(id="export-file-list")
 
     def on_mount(self) -> None:
         self._refresh_list()
@@ -844,6 +918,27 @@ class ProjectsScreen(Screen):
         if not projects:
             ol.add_option(Option("  No projects yet — press n to create one.", id="__empty__"))
 
+    def _refresh_exports(self) -> None:
+        ol: OptionList = self.query_one("#export-file-list", OptionList)
+        ol.clear_options()
+        app: WriteApp = self.app  # type: ignore[assignment]
+        export_dir = app.storage.exports_dir
+        files: list[Path] = []
+        for ext in ("*.pdf", "*.docx", "*.md"):
+            files.extend(export_dir.glob(ext))
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        self._export_paths = files
+        if not files:
+            ol.add_option(Option("  No exports yet.", id="__empty__"))
+        else:
+            for f in files:
+                try:
+                    mod = datetime.fromtimestamp(f.stat().st_mtime).strftime("%b %d, %Y %H:%M")
+                except (ValueError, OSError):
+                    mod = ""
+                size_kb = f.stat().st_size // 1024
+                ol.add_option(Option(f"{f.name}  ({mod}, {size_kb} KB)", id=str(f)))
+
     @on(OptionList.OptionSelected, "#project-list")
     def open_project(self, event: OptionList.OptionSelected) -> None:
         if event.option_id == "__empty__":
@@ -853,7 +948,25 @@ class ProjectsScreen(Screen):
         if project:
             app.push_screen(EditorScreen(project))
 
+    @on(OptionList.OptionSelected, "#export-file-list")
+    def open_export(self, event: OptionList.OptionSelected) -> None:
+        if event.option_id == "__empty__":
+            return
+        self._open_file(Path(event.option_id))
+
+    def _open_file(self, path: Path) -> None:
+        """Open a file with the system viewer."""
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception as exc:
+            self.notify(f"Could not open file: {exc}", severity="error")
+
     def action_new_project(self) -> None:
+        if self._showing_exports:
+            return
         self.app.push_screen(NewProjectModal(), callback=self._on_project_created)
 
     def _on_project_created(self, name: str | None) -> None:
@@ -863,6 +976,8 @@ class ProjectsScreen(Screen):
             app.push_screen(EditorScreen(project))
 
     def action_delete_project(self) -> None:
+        if self._showing_exports:
+            return
         ol: OptionList = self.query_one("#project-list", OptionList)
         idx = ol.highlighted
         app: WriteApp = self.app  # type: ignore[assignment]
@@ -879,6 +994,20 @@ class ProjectsScreen(Screen):
             app.storage.delete_project(pid)
             self._refresh_list()
             self.notify("Project deleted.")
+
+    def action_toggle_exports(self) -> None:
+        pv = self.query_one("#projects-view")
+        ev = self.query_one("#exports-view")
+        self._showing_exports = not self._showing_exports
+        if self._showing_exports:
+            pv.styles.display = "none"
+            ev.styles.display = "block"
+            self._refresh_exports()
+            self.query_one("#export-file-list", OptionList).focus()
+        else:
+            ev.styles.display = "none"
+            pv.styles.display = "block"
+            self.query_one("#project-list", OptionList).focus()
 
     def action_quit(self) -> None:
         self.app.exit()
@@ -899,7 +1028,7 @@ class NewProjectModal(ModalScreen[str | None]):
         max-width: 60;
         height: auto;
         max-height: 12;
-        border: solid #444;
+        border: solid #666;
         background: $surface;
         padding: 1 2;
     }
@@ -952,7 +1081,7 @@ class ConfirmModal(ModalScreen[bool]):
         max-width: 60;
         height: auto;
         max-height: 10;
-        border: solid #444;
+        border: solid #666;
         background: $surface;
         padding: 1 2;
     }
@@ -1016,6 +1145,7 @@ class EditorScreen(Screen):
         Binding("ctrl+j", "cite", "Cite"),
         Binding("ctrl+n", "footnote", "Footnote"),
         Binding("ctrl+b", "bold", "Bold"),
+        Binding("ctrl+i", "italic", "Italic"),
     ]
 
     AUTO_SAVE_SECONDS = 30.0
@@ -1113,6 +1243,16 @@ class EditorScreen(Screen):
             row, col = ta.cursor_location
             ta.cursor_location = (row, col - 2)
 
+    def action_italic(self) -> None:
+        ta = self.query_one("#editor", TextArea)
+        sel = ta.selected_text
+        if sel:
+            ta.replace(f"*{sel}*", *ta.selection)
+        else:
+            ta.insert("**")
+            row, col = ta.cursor_location
+            ta.cursor_location = (row, col - 1)
+
     def action_footnote(self) -> None:
         ta = self.query_one("#editor", TextArea)
         ta.insert("^[]")
@@ -1165,40 +1305,32 @@ class EditorScreen(Screen):
 
     # ── YAML frontmatter insertion ──────────────────────────────────
 
-    def _insert_yaml_property(self, prop: str) -> None:
+    _FRONTMATTER_PROPS = ["title", "author", "instructor", "date", "spacing", "style"]
+
+    def action_insert_frontmatter(self) -> None:
+        """Insert all missing YAML frontmatter properties at once."""
         ta = self.query_one("#editor", TextArea)
         text = ta.text
-        prop_line = f"{prop}: "
         m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
         if m:
+            existing = set()
             for line in m.group(1).split("\n"):
-                if line.startswith(prop + ":"):
-                    self.notify(f"'{prop}' already in frontmatter.", severity="warning")
-                    return
+                idx = line.find(":")
+                if idx > 0:
+                    existing.add(line[:idx].strip())
+            missing = [p for p in self._FRONTMATTER_PROPS if p not in existing]
+            if not missing:
+                self.notify("All frontmatter properties already present.", severity="warning")
+                return
+            new_lines = "\n".join(f"{p}: " for p in missing)
             end_pos = m.end(1)
-            new_text = text[:end_pos] + "\n" + prop_line + text[end_pos:]
+            new_text = text[:end_pos] + "\n" + new_lines + text[end_pos:]
         else:
-            new_text = f"---\n{prop_line}\n---\n" + text
+            block = "\n".join(f"{p}: " for p in self._FRONTMATTER_PROPS)
+            new_text = f"---\n{block}\n---\n" + text
         ta.clear()
         ta.insert(new_text)
-
-    def action_insert_author(self) -> None:
-        self._insert_yaml_property("author")
-
-    def action_insert_title(self) -> None:
-        self._insert_yaml_property("title")
-
-    def action_insert_instructor(self) -> None:
-        self._insert_yaml_property("instructor")
-
-    def action_insert_date(self) -> None:
-        self._insert_yaml_property("date")
-
-    def action_insert_spacing(self) -> None:
-        self._insert_yaml_property("spacing")
-
-    def action_insert_style(self) -> None:
-        self._insert_yaml_property("style")
+        self.notify("Frontmatter inserted.")
 
     # ── Export ───────────────────────────────────────────────────────
 
@@ -1371,7 +1503,7 @@ class ExportFormatModal(ModalScreen[str | None]):
         width: 40;
         height: auto;
         max-height: 12;
-        border: solid #444;
+        border: solid #666;
         background: $surface;
         padding: 1 2;
     }
@@ -1417,7 +1549,7 @@ class CitePickerModal(ModalScreen[str | None]):
         width: 80%;
         max-width: 80;
         height: 70%;
-        border: solid #444;
+        border: solid #666;
         background: $surface;
         padding: 1 2;
     }
@@ -1496,7 +1628,7 @@ class SourcesModal(ModalScreen[None]):
         width: 80%;
         max-width: 90;
         height: 80%;
-        border: solid #444;
+        border: solid #666;
         background: $surface;
         padding: 1 2;
     }
@@ -1604,9 +1736,8 @@ class SourceFormModal(ModalScreen[Source | None]):
     #source-form-box {
         width: 80%;
         max-width: 80;
-        height: auto;
-        max-height: 80%;
-        border: solid #444;
+        height: 80%;
+        border: solid #666;
         background: $surface;
         padding: 1 2;
     }
@@ -1621,11 +1752,10 @@ class SourceFormModal(ModalScreen[Source | None]):
         margin-right: 1;
     }
     #source-fields {
-        height: auto;
-        max-height: 18;
+        height: 1fr;
     }
     .form-buttons {
-        height: 3;
+        height: auto;
         margin-top: 1;
     }
     .form-buttons Button {
@@ -1694,35 +1824,38 @@ class SourceFormModal(ModalScreen[Source | None]):
         self.dismiss(None)
 
     def _do_save(self) -> None:
-        data: dict[str, str] = {}
-        for field_key, _ in SOURCE_FIELDS[self.current_type]:
-            try:
-                inp = self.query_one(f"#field-{field_key}", Input)
-                data[field_key] = inp.value.strip()
-            except Exception:
-                data[field_key] = ""
+        try:
+            data: dict[str, str] = {}
+            for field_key, _ in SOURCE_FIELDS[self.current_type]:
+                try:
+                    inp = self.query_one(f"#field-{field_key}", Input)
+                    data[field_key] = inp.value.strip()
+                except Exception:
+                    data[field_key] = ""
 
-        if not data.get("author") or not data.get("title"):
-            self.notify("Author and Title are required.", severity="error")
-            return
+            if not data.get("author") or not data.get("title"):
+                self.notify("Author and Title are required.", severity="error")
+                return
 
-        source = Source(
-            id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
-            source_type=self.current_type,
-            author=data.get("author", ""),
-            title=data.get("title", ""),
-            year=data.get("year", ""),
-            publisher=data.get("publisher", ""),
-            city=data.get("city", ""),
-            journal=data.get("journal", ""),
-            volume=data.get("volume", ""),
-            issue=data.get("issue", ""),
-            pages=data.get("pages", ""),
-            url=data.get("url", ""),
-            access_date=data.get("access_date", ""),
-            site_name=data.get("site_name", ""),
-        )
-        self.dismiss(source)
+            source = Source(
+                id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+                source_type=self.current_type,
+                author=data.get("author", ""),
+                title=data.get("title", ""),
+                year=data.get("year", ""),
+                publisher=data.get("publisher", ""),
+                city=data.get("city", ""),
+                journal=data.get("journal", ""),
+                volume=data.get("volume", ""),
+                issue=data.get("issue", ""),
+                pages=data.get("pages", ""),
+                url=data.get("url", ""),
+                access_date=data.get("access_date", ""),
+                site_name=data.get("site_name", ""),
+            )
+            self.dismiss(source)
+        except Exception as exc:
+            self.notify(f"Error saving source: {exc}", severity="error")
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1745,12 +1878,7 @@ class WriteCommands(Provider):
             ("Bibliography", "Insert bibliography from all sources", screen.action_bibliography),
             ("Sources", "Manage sources", screen.action_sources),
             ("Export", "Export document", screen.action_export_pdf),
-            ("Insert author", "Add author to frontmatter", screen.action_insert_author),
-            ("Insert title", "Add title to frontmatter", screen.action_insert_title),
-            ("Insert instructor", "Add instructor to frontmatter", screen.action_insert_instructor),
-            ("Insert date", "Add date to frontmatter", screen.action_insert_date),
-            ("Insert spacing", "Add spacing to frontmatter", screen.action_insert_spacing),
-            ("Insert style", "Add style to frontmatter", screen.action_insert_style),
+            ("Insert frontmatter", "Add YAML frontmatter properties", screen.action_insert_frontmatter),
         ]
 
     async def discover(self) -> Hits:
@@ -1777,7 +1905,23 @@ class WriteApp(App):
     TITLE = "write."
     CSS = """
     Screen {
-        background: #1a1a2e;
+        background: #2a2a2a;
+    }
+    Button {
+        background: #555;
+        color: #e0e0e0;
+        border: tall #777;
+        margin: 0 1;
+    }
+    Button:hover {
+        background: #666;
+    }
+    Button:focus {
+        background: #666;
+        border: tall #999;
+    }
+    Button.-error {
+        background: #8b3a3a;
     }
     #projects-title {
         color: #e0e0e0;
@@ -1793,7 +1937,7 @@ class WriteApp(App):
     #editor-status {
         dock: bottom;
         height: 1;
-        background: #16213e;
+        background: #333333;
         color: #8a8a8a;
         padding: 0 2;
     }

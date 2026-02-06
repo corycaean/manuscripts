@@ -32,7 +32,7 @@ def test_chicago_book_footnote():
         year="1925", publisher="Scribner", city="New York",
     )
     fn = book.to_chicago_footnote()
-    assert fn == "F. Scott Fitzgerald, *The Great Gatsby* (New York: Scribner, 1925)."
+    assert fn == "F. Scott Fitzgerald, *The Great Gatsby* (Scribner, 1925)."
     print(f"  Book footnote: {fn}")
 
     fn_page = book.to_chicago_footnote("42")
@@ -256,27 +256,28 @@ def test_resolve_reference_doc():
 def test_lua_filter_generation():
     # Basic filter
     basic = _lua_basic_filter()
-    assert "function Header" in basic
+    assert "function Pandoc" in basic
     assert "pageBreakBefore" in basic
     assert "Bibliography" in basic
+    assert "w:hanging" in basic
     print("  Basic filter OK")
 
     # Coverpage filter
     yaml = {"title": "Test", "author": "Smith", "style": "chicago"}
     cover = _lua_coverpage_filter(yaml)
-    assert "function Header" in cover
     assert "function Meta" in cover
     assert "function Pandoc" in cover
     assert "pageBreakBefore" in cover
+    assert "w:hanging" in cover
     assert '"Test"' in cover or "Test" in cover
     print("  Coverpage filter OK")
 
     # Header filter
     yaml2 = {"title": "Essay", "author": "Doe", "style": "mla"}
     header = _lua_header_filter(yaml2)
-    assert "function Header" in header
     assert "function Meta" in header
     assert "function Pandoc" in header
+    assert "w:hanging" in header
     assert "MLA" in header
     print("  Header filter OK")
 
