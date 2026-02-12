@@ -1334,10 +1334,10 @@ class KeybindingsPanel(Static):
     DEFAULT_CSS = """
     KeybindingsPanel {
         dock: right;
-        width: 38;
+        width: 26;
         height: 1fr;
         border-left: vkey $foreground 30%;
-        padding: 1 2;
+        padding: 1 1;
         overflow-y: auto;
     }
     """
@@ -1357,33 +1357,31 @@ class KeybindingsPanel(Static):
         tbl.add_column(style=desc_style)
 
         sections = [
-            ("Management", [
-                ("Ctrl+M", "Return to manuscripts"),
-                ("Ctrl+O", "Manage sources"),
-                ("Ctrl+P", "Invoke command palette"),
-                ("Ctrl+Q", "Quit"),
-                ("Ctrl+S", "Save"),
+            ("", [
+                ("^M", "Manuscripts"),
+                ("^O", "Sources"),
+                ("^P", "Commands"),
+                ("^Q", "Quit"),
+                ("^S", "Save"),
             ]),
-            ("Editing", [
-                ("Ctrl+B", "Bold"),
-                ("Ctrl+C", "Copy"),
-                ("Ctrl+I", "Italic"),
-                ("Ctrl+N", "Insert blank footnote"),
-                ("Ctrl+R", "Insert footnote with reference"),
-                ("Ctrl+V", "Paste"),
-                ("Ctrl+Y", "Redo"),
-                ("Ctrl+Z", "Undo"),
-                ("Shift+Arrows", "Select text"),
+            ("", [
+                ("^B", "Bold"),
+                ("^I", "Italic"),
+                ("^N", "Footnote"),
+                ("^R", "Cite"),
+                ("^Z", "Undo"),
+                ("^Y", "Redo"),
             ]),
-            ("Help", [
-                ("Ctrl+H", "Show keybindings"),
+            ("", [
+                ("^H", "This panel"),
             ]),
         ]
 
         for i, (title, bindings) in enumerate(sections):
             if i > 0:
                 tbl.add_row("", "")
-            tbl.add_row("", Text(title, style=hdr_style))
+            if title:
+                tbl.add_row("", Text(title, style=hdr_style))
             for key, desc in bindings:
                 tbl.add_row(key, desc)
 
