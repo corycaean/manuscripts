@@ -1968,8 +1968,7 @@ class CitePickerModal(ModalScreen[str | None]):
         # Find the source
         for s in self.filtered:
             if s.id == event.option_id:
-                footnote = f"^[{s.to_chicago_footnote()}]"
-                self.dismiss(footnote)
+                self.dismiss(s.to_chicago_footnote())
                 return
         self.dismiss(None)
 
@@ -1982,7 +1981,7 @@ class CitePickerModal(ModalScreen[str | None]):
             idx = 0
         if idx is not None and idx < len(self.filtered):
             s = self.filtered[idx]
-            self.dismiss(f"^[{s.to_chicago_footnote()}]")
+            self.dismiss(s.to_chicago_footnote())
             return
         self.dismiss(None)
 
