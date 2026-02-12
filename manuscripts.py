@@ -44,6 +44,9 @@ from textual.widgets import (
     TextArea,
 )
 from textual.widgets.option_list import Option
+from textual.widgets.text_area import TextAreaTheme
+
+from rich.style import Style
 
 # ════════════════════════════════════════════════════════════════════════
 #  Data Models
@@ -1277,6 +1280,25 @@ class ConfirmModal(ModalScreen[bool]):
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 
 
+_MANUSCRIPTS_THEME = TextAreaTheme(
+    name="manuscripts",
+    base_style=Style(color="#e0e0e0", bgcolor="#2a2a2a"),
+    cursor_style=Style(color="#2a2a2a", bgcolor="#e0e0e0"),
+    cursor_line_style=Style(bgcolor="#333333"),
+    selection_style=Style(bgcolor="#444444"),
+    syntax_styles={
+        "bold": Style(bold=True),
+        "italic": Style(italic=True),
+        "strikethrough": Style(strike=True),
+        "inline_code": Style(color="#a0a0a0", bgcolor="#383838"),
+        "heading": Style(bold=True, color="#e0af68"),
+        "heading.marker": Style(color="#666666"),
+        "link.label": Style(color="#7aa2f7", underline=True),
+        "link.uri": Style(color="#666666"),
+    },
+)
+
+
 class MarkdownTextArea(TextArea):
     """TextArea with combined heading + inline markdown highlighting.
 
@@ -1418,6 +1440,8 @@ class EditorScreen(Screen):
     @staticmethod
     def _register_markdown_language(ta: TextArea) -> None:
         """Register markdown with the inline grammar for bold/italic highlighting."""
+        ta.register_theme(_MANUSCRIPTS_THEME)
+        ta.theme = "manuscripts"
         try:
             from tree_sitter import Language as TSLanguage
             from tree_sitter_markdown import inline_language
