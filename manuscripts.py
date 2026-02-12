@@ -1558,7 +1558,6 @@ class EditorScreen(Screen):
         if footnote_text:
             ta = self.query_one("#editor", TextArea)
             ta.insert(footnote_text)
-            self.notify("Citation inserted.")
 
     def action_bibliography(self) -> None:
         sources = self.project.get_sources()
@@ -1908,9 +1907,9 @@ class CitePickerModal(ModalScreen[str | None]):
         align: center middle;
     }
     #cite-box {
-        width: 80%;
-        max-width: 80;
-        height: 70%;
+        width: 95%;
+        max-width: 100;
+        height: 90%;
         border: solid #666;
         background: $surface;
         padding: 1 2;
