@@ -1345,8 +1345,8 @@ class ConfirmModal(ModalScreen[bool]):
         box.border_title = self.question
         with box:
             with Horizontal():
-                yield Button("Yes [y]", variant="error", id="btn-yes")
-                yield Button("No [n]", id="btn-no")
+                yield Button("(y) Yes", variant="error", id="btn-yes")
+                yield Button("(n) No", id="btn-no")
 
     def on_mount(self) -> None:
         self.query_one("#btn-no", Button).focus()
@@ -2139,10 +2139,10 @@ class SourcesModal(ModalScreen[None]):
         with box:
             yield OptionList(id="source-list")
             with Horizontal(classes="sources-buttons"):
-                yield Button("Add [a]", id="btn-add")
-                yield Button("Import [i]", id="btn-import")
-                yield Button("Delete [d]", variant="error", id="btn-del")
-                yield Button("Close [Esc]", id="btn-close")
+                yield Button("(a) Add", id="btn-add")
+                yield Button("(i) Import", id="btn-import")
+                yield Button("(d) Delete", variant="error", id="btn-del")
+                yield Button("(Esc) Close", id="btn-close")
 
     def on_mount(self) -> None:
         self._refresh_list()
@@ -2200,7 +2200,7 @@ class SourcesModal(ModalScreen[None]):
         now = time.monotonic()
         if now - self._delete_pending < 2.0:
             self._delete_pending = 0.0
-            self.query_one("#btn-del", Button).label = "Delete [d]"
+            self.query_one("#btn-del", Button).label = "(d) Delete"
             s = sources[idx]
             self.project.remove_source(s.id)
             app: ManuscriptsApp = self.app  # type: ignore[assignment]
@@ -2209,13 +2209,13 @@ class SourcesModal(ModalScreen[None]):
             self.notify("Source deleted.")
         else:
             self._delete_pending = now
-            self.query_one("#btn-del", Button).label = "Confirm? [d]"
+            self.query_one("#btn-del", Button).label = "(d) Confirm?"
             self.set_timer(2.0, self._reset_delete_hint)
 
     def _reset_delete_hint(self) -> None:
         if self._delete_pending:
             self._delete_pending = 0.0
-            self.query_one("#btn-del", Button).label = "Delete [d]"
+            self.query_one("#btn-del", Button).label = "(d) Delete"
 
     def action_import_sources(self) -> None:
         app: ManuscriptsApp = self.app  # type: ignore[assignment]
@@ -2314,10 +2314,10 @@ class SourceFormModal(ModalScreen[Source | None]):
         box.border_title = "Add Source"
         with box:
             with Horizontal(id="source-type-bar"):
-                yield Button("Book [b]", id="btn-type-book")
-                yield Button("Section [s]", id="btn-type-book_section")
-                yield Button("Article [a]", id="btn-type-article")
-                yield Button("Website [w]", id="btn-type-website")
+                yield Button("(b) Book", id="btn-type-book")
+                yield Button("(s) Section", id="btn-type-book_section")
+                yield Button("(a) Article", id="btn-type-article")
+                yield Button("(w) Website", id="btn-type-website")
             with VerticalScroll(id="source-fields"):
                 for stype in SOURCE_TYPES:
                     for field_key, label in SOURCE_FIELDS[stype]:
@@ -2596,8 +2596,8 @@ class ImportSourcesModal(ModalScreen[list[Source] | None]):
         with box:
             yield OptionList(id="import-list")
             with Horizontal(classes="import-buttons"):
-                yield Button("Import All [a]", id="btn-import-all")
-                yield Button("Back [Esc]", id="btn-import-back")
+                yield Button("(a) Import All", id="btn-import-all")
+                yield Button("(Esc) Back", id="btn-import-back")
 
     def on_mount(self) -> None:
         self._show_projects()
