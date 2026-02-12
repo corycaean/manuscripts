@@ -55,7 +55,7 @@ class Source:
     """A bibliographic source with simplified metadata."""
 
     id: str
-    source_type: str  # book | article | website
+    source_type: str  # book | book_section | article | website
     author: str
     title: str
     year: str
@@ -67,6 +67,9 @@ class Source:
     volume: str = ""
     issue: str = ""
     pages: str = ""
+    # Book section (chapter in edited book)
+    book_title: str = ""
+    editor: str = ""
     # Website
     url: str = ""
     access_date: str = ""
@@ -102,6 +105,19 @@ class Source:
             elif page:
                 c += f": {page}"
             return c + "."
+        if self.source_type == "book_section":
+            c = f'{a}, "{self.title}," in *{self.book_title}*'
+            if self.editor:
+                c += f", ed. {self.editor}"
+            if self.publisher:
+                c += f" ({self.publisher}, {self.year})"
+            elif self.year:
+                c += f" ({self.year})"
+            if self.pages:
+                c += f", {self.pages}"
+            elif page:
+                c += f", {page}"
+            return c + "."
         if self.source_type == "website":
             c = f'{a}, "{self.title},"'
             if self.site_name:
@@ -133,6 +149,18 @@ class Source:
             if self.pages:
                 c += f": {self.pages}"
             return c + "."
+        if self.source_type == "book_section":
+            c = f'{a}. "{self.title}." In *{self.book_title}*'
+            if self.editor:
+                c += f", edited by {self.editor}"
+            if self.pages:
+                c += f", {self.pages}"
+            c += "."
+            if self.publisher:
+                c += f" {self.publisher}, {self.year}."
+            elif self.year:
+                c += f" {self.year}."
+            return c
         if self.source_type == "website":
             c = f'{a}. "{self.title}."'
             if self.site_name:
@@ -861,11 +889,28 @@ def fuzzy_filter(sources: list[Source], query: str) -> list[Source]:
     return [s for _, s in scored]
 
 
+def fuzzy_filter_projects(projects: list[Project], query: str) -> list[Project]:
+    if not query:
+        return list(projects)
+    q = query.lower()
+    scored: list[tuple[float, Project]] = []
+    for p in projects:
+        hay = p.name.lower()
+        if q in hay:
+            scored.append((100.0, p))
+        else:
+            ratio = SequenceMatcher(None, q, hay).ratio() * 100
+            if ratio > 30:
+                scored.append((ratio, p))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [p for _, p in scored]
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  Source‑type field definitions
 # ════════════════════════════════════════════════════════════════════════
 
-SOURCE_TYPES = ["book", "article", "website"]
+SOURCE_TYPES = ["book", "book_section", "article", "website"]
 
 SOURCE_FIELDS: dict[str, list[tuple[str, str]]] = {
     "book": [
@@ -873,6 +918,15 @@ SOURCE_FIELDS: dict[str, list[tuple[str, str]]] = {
         ("title", "Title"),
         ("year", "Year"),
         ("publisher", "Publisher"),
+    ],
+    "book_section": [
+        ("author", "Author (Last, First)"),
+        ("title", "Chapter Title"),
+        ("book_title", "Book Title"),
+        ("editor", "Editor"),
+        ("year", "Year"),
+        ("publisher", "Publisher"),
+        ("pages", "Pages"),
     ],
     "article": [
         ("author", "Author (Last, First)"),
@@ -934,16 +988,22 @@ class ProjectsScreen(Screen):
         color: #777;
         padding: 0 2;
     }
+    #project-search {
+        margin: 0 2;
+    }
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._showing_exports = False
         self._export_paths: list[Path] = []
+        self._all_projects: list[Project] = []
+        self._filtered_projects: list[Project] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="projects-view"):
             yield Static("Manuscripts", id="projects-title")
+            yield Input(placeholder="Search manuscripts...", id="project-search")
             yield OptionList(id="project-list")
             yield Static("(n) New  (d) Delete  (e) Exports", id="projects-hints")
         with Vertical(id="exports-view"):
@@ -953,20 +1013,23 @@ class ProjectsScreen(Screen):
     def on_mount(self) -> None:
         self._refresh_list()
 
-    def _refresh_list(self) -> None:
+    def _refresh_list(self, filter_query: str = "") -> None:
         ol: OptionList = self.query_one("#project-list", OptionList)
         ol.clear_options()
         app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        projects = app.storage.list_projects()
-        app.projects = projects
-        for p in projects:
+        self._all_projects = app.storage.list_projects()
+        app.projects = self._all_projects
+        self._filtered_projects = fuzzy_filter_projects(self._all_projects, filter_query)
+        for p in self._filtered_projects:
             try:
                 mod = datetime.fromisoformat(p.modified).strftime("%b %d, %Y")
             except (ValueError, TypeError):
                 mod = ""
             ol.add_option(Option(f"{p.name}  ({mod})", id=p.id))
-        if not projects:
+        if not self._all_projects:
             ol.add_option(Option("  No manuscripts yet — press n to create one.", id="__empty__"))
+        elif not self._filtered_projects:
+            ol.add_option(Option("  No matching manuscripts.", id="__empty__"))
 
     def _refresh_exports(self) -> None:
         ol: OptionList = self.query_one("#export-file-list", OptionList)
@@ -988,6 +1051,20 @@ class ProjectsScreen(Screen):
                     mod = ""
                 size_kb = f.stat().st_size // 1024
                 ol.add_option(Option(f"{f.name}  ({mod}, {size_kb} KB)", id=str(f)))
+
+    @on(Input.Changed, "#project-search")
+    def _search_changed(self, event: Input.Changed) -> None:
+        self._refresh_list(filter_query=event.value)
+
+    def on_key(self, event) -> None:
+        """Down arrow in search input moves focus to the project list."""
+        if event.key == "down":
+            focused = self.app.focused
+            search_input = self.query_one("#project-search", Input)
+            if focused is search_input:
+                ol = self.query_one("#project-list", OptionList)
+                ol.focus()
+                event.prevent_default()
 
     @on(OptionList.OptionSelected, "#project-list")
     def open_project(self, event: OptionList.OptionSelected) -> None:
@@ -1053,9 +1130,8 @@ class ProjectsScreen(Screen):
             return
         ol: OptionList = self.query_one("#project-list", OptionList)
         idx = ol.highlighted
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        if idx is not None and idx < len(app.projects):
-            project = app.projects[idx]
+        if idx is not None and idx < len(self._filtered_projects):
+            project = self._filtered_projects[idx]
             self.app.push_screen(
                 ConfirmModal(f"Delete '{project.name}'?"),
                 callback=lambda ok: self._do_delete(ok, project.id),
@@ -1065,7 +1141,8 @@ class ProjectsScreen(Screen):
         if ok:
             app: ManuscriptsApp = self.app  # type: ignore[assignment]
             app.storage.delete_project(pid)
-            self._refresh_list()
+            query = self.query_one("#project-search", Input).value
+            self._refresh_list(filter_query=query)
             self.notify("Manuscript deleted.")
 
     def action_toggle_exports(self) -> None:
@@ -1915,6 +1992,7 @@ class SourcesModal(ModalScreen[None]):
     BINDINGS = [
         Binding("a", "add_source", "Add"),
         Binding("d", "delete_source", "Delete"),
+        Binding("i", "import_sources", "Import"),
         Binding("escape", "close", "Close", show=False),
     ]
 
@@ -1928,6 +2006,7 @@ class SourcesModal(ModalScreen[None]):
             yield OptionList(id="source-list")
             with Horizontal(classes="sources-buttons"):
                 yield Button("Add [a]", id="btn-add")
+                yield Button("Import [i]", id="btn-import")
                 yield Button("Delete [d]", variant="error", id="btn-del")
                 yield Button("Close [Esc]", id="btn-close")
 
@@ -1954,6 +2033,10 @@ class SourcesModal(ModalScreen[None]):
     @on(Button.Pressed, "#btn-del")
     def _btn_del(self, event: Button.Pressed) -> None:
         self.action_delete_source()
+
+    @on(Button.Pressed, "#btn-import")
+    def _btn_import(self, event: Button.Pressed) -> None:
+        self.action_import_sources()
 
     @on(Button.Pressed, "#btn-close")
     def _btn_close(self, event: Button.Pressed) -> None:
@@ -1984,6 +2067,40 @@ class SourcesModal(ModalScreen[None]):
             app.storage.save_project(self.project)
             self._refresh_list()
             self.notify("Source deleted.")
+
+    def action_import_sources(self) -> None:
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
+        other_projects = [
+            p for p in app.storage.list_projects() if p.id != self.project.id
+        ]
+        if not other_projects:
+            self.notify("No other manuscripts to import from.", severity="warning")
+            return
+        self.app.push_screen(
+            ImportSourcesModal(other_projects),
+            callback=self._on_sources_imported,
+        )
+
+    def _on_sources_imported(self, sources: list[Source] | None) -> None:
+        if not sources:
+            return
+        existing = self.project.get_sources()
+        existing_keys = {(s.author, s.title, s.year) for s in existing}
+        added = 0
+        for s in sources:
+            if (s.author, s.title, s.year) not in existing_keys:
+                s.id = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + f"_{added}"
+                self.project.add_source(s)
+                existing_keys.add((s.author, s.title, s.year))
+                added += 1
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
+        app.storage.save_project(self.project)
+        self._refresh_list()
+        skipped = len(sources) - added
+        msg = f"Imported {added} source(s)."
+        if skipped:
+            msg += f" {skipped} duplicate(s) skipped."
+        self.notify(msg)
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -2026,7 +2143,7 @@ class SourceFormModal(ModalScreen[Source | None]):
     #source-fields {
         height: 1fr;
     }
-    .book-field, .article-field, .website-field {
+    .book-field, .book_section-field, .article-field, .website-field {
         display: none;
     }
     .form-buttons {
@@ -2058,6 +2175,7 @@ class SourceFormModal(ModalScreen[Source | None]):
             yield Label("Add Source")
             with Horizontal(id="source-type-bar"):
                 yield Button("Book", id="btn-type-book")
+                yield Button("Book Section", id="btn-type-book_section")
                 yield Button("Article", id="btn-type-article")
                 yield Button("Website", id="btn-type-website")
             with VerticalScroll(id="source-fields"):
@@ -2092,6 +2210,10 @@ class SourceFormModal(ModalScreen[Source | None]):
     @on(Button.Pressed, "#btn-type-book")
     def _type_book(self, event: Button.Pressed) -> None:
         self._switch_type("book")
+
+    @on(Button.Pressed, "#btn-type-book_section")
+    def _type_book_section(self, event: Button.Pressed) -> None:
+        self._switch_type("book_section")
 
     @on(Button.Pressed, "#btn-type-article")
     def _type_article(self, event: Button.Pressed) -> None:
@@ -2138,6 +2260,8 @@ class SourceFormModal(ModalScreen[Source | None]):
                 volume=data.get("volume", ""),
                 issue=data.get("issue", ""),
                 pages=data.get("pages", ""),
+                book_title=data.get("book_title", ""),
+                editor=data.get("editor", ""),
                 url=data.get("url", ""),
                 access_date=data.get("access_date", ""),
                 site_name=data.get("site_name", ""),
@@ -2167,8 +2291,8 @@ def parse_bibtex(text: str) -> list[Source]:
 
     type_map = {
         "book": "book",
-        "inbook": "book",
-        "incollection": "book",
+        "inbook": "book_section",
+        "incollection": "book_section",
         "article": "article",
         "inproceedings": "article",
         "conference": "article",
@@ -2202,6 +2326,8 @@ def parse_bibtex(text: str) -> list[Source]:
             volume=fields.get("volume", ""),
             issue=fields.get("number", ""),
             pages=fields.get("pages", ""),
+            book_title=fields.get("booktitle", ""),
+            editor=fields.get("editor", ""),
             url=fields.get("url", ""),
             access_date=fields.get("urldate", ""),
             site_name=fields.get("organization", fields.get("howpublished", "")),
@@ -2277,6 +2403,123 @@ class BibImportModal(ModalScreen[list[Source] | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+# ── Import sources from another project ───────────────────────────────
+
+
+class ImportSourcesModal(ModalScreen[list[Source] | None]):
+    """Two-phase modal: pick a project, then pick sources to import."""
+
+    DEFAULT_CSS = """
+    ImportSourcesModal {
+        align: center middle;
+    }
+    #import-box {
+        width: 80%;
+        max-width: 90;
+        height: 70%;
+        border: solid #666;
+        background: $surface;
+        padding: 1 2;
+    }
+    #import-box Label {
+        margin-bottom: 1;
+    }
+    #import-list {
+        height: 1fr;
+    }
+    .import-buttons {
+        height: 3;
+        dock: bottom;
+    }
+    .import-buttons Button {
+        margin-right: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "go_back", "Back", show=False)]
+
+    def __init__(self, projects: list[Project]) -> None:
+        super().__init__()
+        self._projects = projects
+        self._phase = "projects"  # "projects" or "sources"
+        self._selected_project: Project | None = None
+        self._sources: list[Source] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="import-box"):
+            yield Label("Import Sources — Select a manuscript", id="import-title")
+            yield OptionList(id="import-list")
+            with Horizontal(classes="import-buttons"):
+                yield Button("Import All", id="btn-import-all")
+                yield Button("Back", id="btn-import-back")
+
+    def on_mount(self) -> None:
+        self._show_projects()
+        self.query_one("#btn-import-all", Button).styles.display = "none"
+
+    def _show_projects(self) -> None:
+        self._phase = "projects"
+        self._selected_project = None
+        self._sources = []
+        self.query_one("#import-title", Label).update("Import Sources — Select a manuscript")
+        self.query_one("#btn-import-all", Button).styles.display = "none"
+        ol: OptionList = self.query_one("#import-list", OptionList)
+        ol.clear_options()
+        for p in self._projects:
+            src_count = len(p.get_sources())
+            ol.add_option(Option(f"{p.name}  ({src_count} sources)", id=p.id))
+        ol.focus()
+
+    def _show_sources(self, project: Project) -> None:
+        self._phase = "sources"
+        self._selected_project = project
+        self._sources = project.get_sources()
+        self.query_one("#import-title", Label).update(
+            f"Import Sources — {project.name} (Enter to import one, or Import All)"
+        )
+        self.query_one("#btn-import-all", Button).styles.display = "block"
+        ol: OptionList = self.query_one("#import-list", OptionList)
+        ol.clear_options()
+        if not self._sources:
+            ol.add_option(Option("  No sources in this manuscript.", id="__empty__"))
+        else:
+            for s in self._sources:
+                ol.add_option(
+                    Option(f"{s.author} ({s.year}) — {s.title}", id=s.id)
+                )
+        ol.focus()
+
+    @on(OptionList.OptionSelected, "#import-list")
+    def _select(self, event: OptionList.OptionSelected) -> None:
+        if event.option_id == "__empty__":
+            return
+        if self._phase == "projects":
+            for p in self._projects:
+                if p.id == event.option_id:
+                    self._show_sources(p)
+                    return
+        elif self._phase == "sources":
+            for s in self._sources:
+                if s.id == event.option_id:
+                    self.dismiss([s])
+                    return
+
+    @on(Button.Pressed, "#btn-import-all")
+    def _import_all(self, event: Button.Pressed) -> None:
+        if self._phase == "sources" and self._sources:
+            self.dismiss(list(self._sources))
+
+    @on(Button.Pressed, "#btn-import-back")
+    def _back(self, event: Button.Pressed) -> None:
+        self.action_go_back()
+
+    def action_go_back(self) -> None:
+        if self._phase == "sources":
+            self._show_projects()
+        else:
+            self.dismiss(None)
 
 
 # ════════════════════════════════════════════════════════════════════════
