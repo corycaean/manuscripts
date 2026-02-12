@@ -2199,10 +2199,8 @@ class SourceFormModal(ModalScreen[Source | None]):
         height: 90%;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #source-form-box > Label {
-        margin-bottom: 0;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     #source-type-bar {
         height: 3;
@@ -2219,19 +2217,11 @@ class SourceFormModal(ModalScreen[Source | None]):
     }
     .form-buttons {
         height: auto;
-        margin-top: 1;
+        margin-top: 0;
         display: none;
     }
     .form-buttons Button {
         margin-right: 1;
-    }
-    .field-label {
-        margin-top: 0;
-    }
-    #tab-hint {
-        display: none;
-        color: #777;
-        margin-top: 0;
     }
     """
 
@@ -2242,21 +2232,18 @@ class SourceFormModal(ModalScreen[Source | None]):
         self.current_type = ""
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="source-form-box"):
-            yield Label("Add Source")
+        box = Vertical(id="source-form-box")
+        box.border_title = "Add Source"
+        with box:
             with Horizontal(id="source-type-bar"):
                 yield Button("Book", id="btn-type-book")
                 yield Button("Book Section", id="btn-type-book_section")
                 yield Button("Article", id="btn-type-article")
                 yield Button("Website", id="btn-type-website")
             with VerticalScroll(id="source-fields"):
-                # All fields flat — no nested containers.
-                # Visibility toggled per-type via CSS classes.
                 for stype in SOURCE_TYPES:
                     for field_key, label in SOURCE_FIELDS[stype]:
-                        yield Label(label, classes=f"field-label {stype}-field")
                         yield Input(placeholder=label, id=f"field-{stype}-{field_key}", classes=f"{stype}-field")
-                yield Label("Tab \u2192 next field | Shift+Tab \u2192 previous", id="tab-hint")
             with Horizontal(classes="form-buttons"):
                 yield Button("Save", id="btn-save")
                 yield Button("Cancel", id="btn-form-cancel")
@@ -2271,9 +2258,8 @@ class SourceFormModal(ModalScreen[Source | None]):
         for t in SOURCE_TYPES:
             for w in self.query(f".{t}-field"):
                 w.styles.display = "block" if t == stype else "none"
-        # Show form buttons and tab hint
+        # Show form buttons
         self.query_one(".form-buttons").styles.display = "block"
-        self.query_one("#tab-hint").styles.display = "block"
         # Focus the first input
         first_input = self.query_one(f"#field-{stype}-{SOURCE_FIELDS[stype][0][0]}", Input)
         first_input.focus()
