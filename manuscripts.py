@@ -1897,7 +1897,7 @@ class PrinterPickerModal(ModalScreen[str | None]):
     def _select(self, event: OptionList.OptionSelected) -> None:
         printer_name = event.option_id
         try:
-            subprocess.Popen(["lp", "-d", printer_name, str(self._file_path)])
+            subprocess.Popen(["lp", "-d", printer_name, "-o", "sides=two-sided-long-edge", str(self._file_path)])
             self.notify(f"Sent to {printer_name}.")
         except Exception as exc:
             self.notify(f"Print failed: {exc}", severity="error")
