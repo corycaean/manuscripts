@@ -1212,6 +1212,12 @@ class ProjectsScreen(Screen):
         else:
             self._mass_export_pending = now
             self.query_one("#projects-hints", Static).update(self._HINTS_MASS_MD)
+            self.set_timer(2.0, self._reset_mass_export_hint)
+
+    def _reset_mass_export_hint(self) -> None:
+        if self._mass_export_pending:
+            self._mass_export_pending = 0.0
+            self.query_one("#projects-hints", Static).update(self._HINTS_DEFAULT)
 
     @work(thread=True)
     def _do_mass_export_md(self) -> None:
