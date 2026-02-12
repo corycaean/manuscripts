@@ -36,7 +36,6 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
     Input,
-    Label,
     ListItem,
     ListView,
     OptionList,
@@ -980,7 +979,7 @@ class ProjectsScreen(Screen):
     }
     #exports-title {
         color: #e0e0e0;
-        padding: 1 2;
+        padding: 0 2;
     }
     #export-file-list {
         margin: 1 2;
@@ -1213,21 +1212,20 @@ class NewProjectModal(ModalScreen[str | None]):
         width: 60%;
         max-width: 60;
         height: auto;
-        max-height: 12;
+        max-height: 10;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #new-project-box Label {
-        margin-bottom: 1;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="new-project-box"):
-            yield Label("New Manuscript")
+        box = Vertical(id="new-project-box")
+        box.border_title = "New Manuscript"
+        with box:
             yield Input(placeholder="Manuscript name…", id="project-name-input")
             with Horizontal():
                 yield Button("Create", id="btn-create")
@@ -1266,13 +1264,11 @@ class ConfirmModal(ModalScreen[bool]):
         width: 60%;
         max-width: 60;
         height: auto;
-        max-height: 10;
+        max-height: 8;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #confirm-box Label {
-        margin-bottom: 1;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     """
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
@@ -1282,8 +1278,9 @@ class ConfirmModal(ModalScreen[bool]):
         self.question = question
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-box"):
-            yield Label(self.question)
+        box = Vertical(id="confirm-box")
+        box.border_title = self.question
+        with box:
             with Horizontal():
                 yield Button("Yes", variant="error", id="btn-yes")
                 yield Button("No", id="btn-no")
@@ -1842,21 +1839,20 @@ class ExportFormatModal(ModalScreen[str | None]):
     #export-box {
         width: 40;
         height: auto;
-        max-height: 12;
+        max-height: 10;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #export-box Label {
-        margin-bottom: 1;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="export-box"):
-            yield Label("Export as")
+        box = Vertical(id="export-box")
+        box.border_title = "Export as"
+        with box:
             yield OptionList(
                 Option("PDF (.pdf)", id="pdf"),
                 Option("Word (.docx)", id="docx"),
@@ -1889,13 +1885,11 @@ class PrinterPickerModal(ModalScreen[str | None]):
         width: 60%;
         max-width: 60;
         height: auto;
-        max-height: 18;
+        max-height: 16;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #printer-box Label {
-        margin-bottom: 1;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     #printer-list {
         height: auto;
@@ -1911,8 +1905,9 @@ class PrinterPickerModal(ModalScreen[str | None]):
         self._file_path = file_path
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="printer-box"):
-            yield Label("Print to")
+        box = Vertical(id="printer-box")
+        box.border_title = "Print to"
+        with box:
             ol = OptionList(id="printer-list")
             for p in self._printers:
                 ol.add_option(Option(p, id=p))
@@ -1951,10 +1946,8 @@ class CitePickerModal(ModalScreen[str | None]):
         height: 90%;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #cite-box Label {
-        margin-bottom: 1;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     #cite-results {
         height: 1fr;
@@ -1969,8 +1962,9 @@ class CitePickerModal(ModalScreen[str | None]):
         self.filtered: list[Source] = list(sources)
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="cite-box"):
-            yield Label("Insert Citation")
+        box = Vertical(id="cite-box")
+        box.border_title = "Insert Citation"
+        with box:
             yield Input(placeholder="Search sources…", id="cite-search")
             yield OptionList(id="cite-results")
 
@@ -2043,16 +2037,14 @@ class SourcesModal(ModalScreen[None]):
         height: 80%;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #sources-box Label {
-        margin-bottom: 1;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     #source-list {
         height: 1fr;
     }
     .sources-buttons {
-        height: 3;
+        height: auto;
         dock: bottom;
     }
     .sources-buttons Button {
@@ -2072,8 +2064,9 @@ class SourcesModal(ModalScreen[None]):
         self.project = project
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="sources-box"):
-            yield Label(f"Sources: {self.project.name}")
+        box = Vertical(id="sources-box")
+        box.border_title = f"Sources: {self.project.name}"
+        with box:
             yield OptionList(id="source-list")
             with Horizontal(classes="sources-buttons"):
                 yield Button("Add [a]", id="btn-add")
@@ -2203,7 +2196,7 @@ class SourceFormModal(ModalScreen[Source | None]):
         border-title-color: #e0e0e0;
     }
     #source-type-bar {
-        height: 3;
+        height: auto;
         margin-bottom: 0;
     }
     #source-type-bar Button {
@@ -2403,21 +2396,20 @@ class BibImportModal(ModalScreen[list[Source] | None]):
         width: 70%;
         max-width: 70;
         height: auto;
-        max-height: 14;
+        max-height: 10;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #bib-import-box Label {
-        margin-bottom: 1;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="bib-import-box"):
-            yield Label("Import .bib File")
+        box = Vertical(id="bib-import-box")
+        box.border_title = "Import .bib File"
+        with box:
             yield Input(placeholder="Path to .bib file…", id="bib-path-input")
             with Horizontal():
                 yield Button("Import", id="btn-bib-import")
@@ -2478,16 +2470,14 @@ class ImportSourcesModal(ModalScreen[list[Source] | None]):
         height: 70%;
         border: solid #666;
         background: $surface;
-        padding: 1 2;
-    }
-    #import-box Label {
-        margin-bottom: 1;
+        padding: 0 2;
+        border-title-color: #e0e0e0;
     }
     #import-list {
         height: 1fr;
     }
     .import-buttons {
-        height: 3;
+        height: auto;
         dock: bottom;
     }
     .import-buttons Button {
@@ -2505,8 +2495,9 @@ class ImportSourcesModal(ModalScreen[list[Source] | None]):
         self._sources: list[Source] = []
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="import-box"):
-            yield Label("Import Sources — Select a manuscript", id="import-title")
+        box = Vertical(id="import-box")
+        box.border_title = "Select a manuscript"
+        with box:
             yield OptionList(id="import-list")
             with Horizontal(classes="import-buttons"):
                 yield Button("Import All", id="btn-import-all")
@@ -2520,7 +2511,7 @@ class ImportSourcesModal(ModalScreen[list[Source] | None]):
         self._phase = "projects"
         self._selected_project = None
         self._sources = []
-        self.query_one("#import-title", Label).update("Import Sources — Select a manuscript")
+        self.query_one("#import-box").border_title = "Select a manuscript"
         self.query_one("#btn-import-all", Button).styles.display = "none"
         ol: OptionList = self.query_one("#import-list", OptionList)
         ol.clear_options()
@@ -2533,9 +2524,7 @@ class ImportSourcesModal(ModalScreen[list[Source] | None]):
         self._phase = "sources"
         self._selected_project = project
         self._sources = project.get_sources()
-        self.query_one("#import-title", Label).update(
-            f"Import Sources — {project.name} (Enter to import one, or Import All)"
-        )
+        self.query_one("#import-box").border_title = f"{project.name}"
         self.query_one("#btn-import-all", Button).styles.display = "block"
         ol: OptionList = self.query_one("#import-list", OptionList)
         ol.clear_options()
@@ -2660,22 +2649,23 @@ class ManuscriptsApp(App):
     Button {
         background: #555;
         color: #e0e0e0;
-        border: tall #777;
+        border: none;
+        height: auto;
+        min-width: 0;
         margin: 0 1;
     }
     Button:hover {
         background: #666;
     }
     Button:focus {
-        background: #666;
-        border: tall #999;
+        background: #777;
     }
     Button.-error {
         background: #8b3a3a;
     }
     #projects-title {
         color: #e0e0e0;
-        padding: 1 2;
+        padding: 0 2;
     }
     #project-list {
         margin: 1 2;
