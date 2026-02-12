@@ -1168,7 +1168,7 @@ class ProjectsScreen(Screen):
             self.query_one("#project-list", OptionList).focus()
 
     def action_quit(self) -> None:
-        self.app.exit()
+        self.app.action_quit()
 
 
 # ── New‑project modal ─────────────────────────────────────────────────
@@ -2687,10 +2687,20 @@ class ManuscriptsApp(App):
         super().__init__()
         self.storage = Storage(data_dir)
         self.projects: list[Project] = []
+        self._quit_pending = 0.0
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         """Suppress default system commands; ManuscriptsCommands handles everything."""
         return []
+
+    def action_quit(self) -> None:
+        import time
+        now = time.monotonic()
+        if now - self._quit_pending < 2.0:
+            self.exit()
+        else:
+            self._quit_pending = now
+            self.notify("Press Ctrl+Q again to quit.")
 
     def on_mount(self) -> None:
         self.push_screen(ProjectsScreen())
