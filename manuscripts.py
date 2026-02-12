@@ -966,7 +966,7 @@ class ProjectsScreen(Screen):
         Binding("n", "new_project", "New manuscript"),
         Binding("d", "delete_project", "Delete"),
         Binding("e", "toggle_exports", "Exports"),
-        Binding("m", "mass_export_md", "Export all MD"),
+        Binding("m", "mass_export_md", "Export all to .md"),
         Binding("q", "quit", "Quit", show=False),
     ]
 
@@ -1009,7 +1009,7 @@ class ProjectsScreen(Screen):
             yield Static("Manuscripts", id="projects-title")
             yield Input(placeholder="Search manuscripts...", id="project-search")
             yield OptionList(id="project-list")
-            yield Static("(n) New  (d) Delete  (e) Exports  (m) Export all MD", id="projects-hints")
+            yield Static("(n) New  (d) Delete  (e) Exports  (m) Export all to .md", id="projects-hints")
         with Vertical(id="exports-view"):
             yield Static("Exports", id="exports-title")
             yield OptionList(id="export-file-list")
