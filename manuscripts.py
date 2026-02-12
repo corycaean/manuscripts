@@ -2633,6 +2633,9 @@ class ManuscriptsApp(App):
     Screen {
         background: #2a2a2a;
     }
+    CommandPalette > .command-palette--search-icon {
+        display: none;
+    }
     Button {
         background: #555;
         color: #e0e0e0;
