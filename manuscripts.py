@@ -1429,6 +1429,10 @@ class ExportFormatDialog:
         def _cancel(event):
             self.cancel()
 
+        @self.list._kb.add("escape", eager=True)
+        def _escape(event):
+            self.cancel()
+
         self.dialog = Dialog(
             title="Export as",
             body=HSplit([self.list], padding=0),
@@ -1459,6 +1463,10 @@ class PrinterPickerDialog:
         self.list.set_items([(p, p) for p in printers])
         @self.list._kb.add("c")
         def _cancel(event):
+            self.cancel()
+
+        @self.list._kb.add("escape", eager=True)
+        def _escape(event):
             self.cancel()
 
         self.dialog = Dialog(
@@ -1499,6 +1507,10 @@ class CitePickerDialog:
         self.search_buf.on_text_changed += self._on_search_changed
         search_kb = KeyBindings()
 
+        @search_kb.add("escape", eager=True)
+        def _escape(event):
+            self.cancel()
+
         @search_kb.add("down")
         def _down(event):
             event.app.layout.focus(self.results.window)
@@ -1518,11 +1530,15 @@ class CitePickerDialog:
             content=self.search_control, height=1, style="class:input",
         )
         self.results = SelectableList(on_select=self._on_select)
+        @self.results._kb.add("escape", eager=True)
+        def _escape_list(event):
+            self.cancel()
+
         self._update_results("")
         self.dialog = Dialog(
             title="Insert Citation",
             body=HSplit([self.search_window, self.results], padding=0),
-            buttons=[Button(text="(c) Cancel", handler=self.cancel)],
+            buttons=[Button(text="Cancel", handler=self.cancel)],
             modal=True,
             width=D(preferred=80, max=100),
         )
@@ -1774,6 +1790,10 @@ class SourcesDialog:
         def _close(event):
             close()
 
+        @action_kb.add("escape", eager=True)
+        def _escape(event):
+            close()
+
         self.source_list.control.key_bindings = KeyBindings()
         for b in self.source_list._kb.bindings:
             self.source_list.control.key_bindings.bindings.append(b)
@@ -1961,6 +1981,10 @@ class CommandPaletteDialog:
         self.search_buf.on_text_changed += self._on_search_changed
         search_kb = KeyBindings()
 
+        @search_kb.add("escape", eager=True)
+        def _escape(event):
+            self.cancel()
+
         @search_kb.add("down")
         def _down(event):
             event.app.layout.focus(self.results.window)
@@ -1979,11 +2003,15 @@ class CommandPaletteDialog:
             content=self.search_control, height=1, style="class:input",
         )
         self.results = SelectableList(on_select=self._on_select)
+        @self.results._kb.add("escape", eager=True)
+        def _escape_list(event):
+            self.cancel()
+
         self._update_results("")
         self.dialog = Dialog(
             title="Command Palette",
             body=HSplit([self.search_window, self.results], padding=0),
-            buttons=[Button(text="(c) Cancel", handler=self.cancel)],
+            buttons=[Button(text="Cancel", handler=self.cancel)],
             modal=True,
             width=D(preferred=60, max=80),
         )
