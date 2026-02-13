@@ -1260,6 +1260,7 @@ class AppState:
         self.last_find_query = ""
         self.show_find_panel = False
         self.find_panel = None
+        self.shutdown_pending = 0.0
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -2083,9 +2084,10 @@ class CommandPaletteDialog:
 class FindReplacePanel:
     """Non-modal side panel for find/replace with match cycling."""
 
-    def __init__(self, editor_buf, state, last_query=""):
+    def __init__(self, editor_buf, state, last_query="", editor_area=None):
         self.editor_buf = editor_buf
         self.state = state
+        self.editor_area = editor_area
         self.matches = []
         self.match_idx = -1
         self.status_text = ""
@@ -2114,7 +2116,7 @@ class FindReplacePanel:
 
         @replace_kb.add("tab")
         def _replace_tab(event):
-            self._replace_all()
+            get_app().layout.focus(self.replace_all_window)
 
         self.search_control = BufferControl(
             buffer=self.search_buf, key_bindings=search_kb,
@@ -2131,12 +2133,33 @@ class FindReplacePanel:
         self.status_control = FormattedTextControl(
             lambda: [("class:hint", self.status_text)],
         )
+
+        # Replace All button
+        btn_kb = KeyBindings()
+
+        @btn_kb.add("enter")
+        @btn_kb.add(" ")
+        def _btn_activate(event):
+            self._replace_all()
+
+        @btn_kb.add("tab")
+        def _btn_tab(event):
+            get_app().layout.focus(self.search_window)
+
+        self.replace_all_control = FormattedTextControl(
+            [("class:button", " Replace All ")],
+            key_bindings=btn_kb, focusable=True,
+        )
+        self.replace_all_window = Window(
+            content=self.replace_all_control, height=1,
+        )
+
         self.search_buf.on_text_changed += self._on_changed
 
         def get_hints():
             return [
-                ("class:accent bold", "  Ret"), ("", "  Next/Repl\n"),
-                ("class:accent bold", "  Tab"), ("", "  Field/All\n"),
+                ("class:accent bold", "  Ret"), ("", "  Next / Repl\n"),
+                ("class:accent bold", "  Tab"), ("", "  Next field\n"),
                 ("class:accent bold", "  ^F "), ("", "  Editor\n"),
                 ("class:accent bold", "  Esc"), ("", "  Close\n"),
             ]
@@ -2151,9 +2174,15 @@ class FindReplacePanel:
             Window(content=self.status_control, height=1),
             Label(text=" Replace:"),
             self.replace_window,
+            self.replace_all_window,
             Window(height=1),
             Window(FormattedTextControl(get_hints), height=4),
         ], width=28, style="class:find-panel")
+
+    def _scroll_to_cursor(self):
+        if self.editor_area is not None:
+            row = self.editor_buf.document.cursor_position_row
+            self.editor_area.window.vertical_scroll = max(0, row - 3)
 
     def _rebuild_matches(self):
         query = self.search_buf.text
@@ -2186,6 +2215,7 @@ class FindReplacePanel:
             self.editor_buf.cursor_position = self.matches[self.match_idx]
             n = len(self.matches)
             self.status_text = f" {self.match_idx + 1} of {n} match{'es' if n != 1 else ''}"
+            self._scroll_to_cursor()
         else:
             self.match_idx = -1
             if self.search_buf.text:
@@ -2201,6 +2231,7 @@ class FindReplacePanel:
         self.editor_buf.cursor_position = self.matches[self.match_idx]
         n = len(self.matches)
         self.status_text = f" {self.match_idx + 1} of {n} match{'es' if n != 1 else ''}"
+        self._scroll_to_cursor()
         get_app().invalidate()
 
     def _replace_one(self):
@@ -2220,6 +2251,7 @@ class FindReplacePanel:
             self.editor_buf.cursor_position = self.matches[self.match_idx]
             n = len(self.matches)
             self.status_text = f" {self.match_idx + 1} of {n} match{'es' if n != 1 else ''}"
+            self._scroll_to_cursor()
         else:
             self.match_idx = -1
             self.status_text = " No matches"
@@ -2245,7 +2277,8 @@ class FindReplacePanel:
     def is_focused(self):
         """Return True if any window in this panel has focus."""
         cur = get_app().layout.current_window
-        return cur is self.search_window or cur is self.replace_window
+        return (cur is self.search_window or cur is self.replace_window
+                or cur is self.replace_all_window)
 
     def __pt_container__(self):
         return self.container
@@ -2444,6 +2477,14 @@ def create_app(storage):
             new_text = buf.text[:start] + buf.text[end:]
             buf.set_document(Document(new_text, start), bypass_readonly=True)
 
+    @_editor_cb_kb.add("c-u")
+    def _ctrl_u(event):
+        pass  # Disable unix-line-discard
+
+    @_editor_cb_kb.add("c-m")
+    def _ctrl_m(event):
+        event.current_buffer.newline()  # Explicit newline
+
     editor_area.control.key_bindings = _editor_cb_kb
 
     def get_status_text():
@@ -2472,7 +2513,8 @@ def create_app(storage):
              ("^R", "Cite"), ("^F", "Find/Replace")],
             [("^Z", "Undo"), ("^sZ", "Redo"),
              ("^Up", "Top"), ("^Dn", "Bottom")],
-            [("^W", "Word/para"), ("^G", "This panel")],
+            [("^W", "Word/para"), ("^G", "This panel"),
+             ("^S", "Shutdown*")],
         ]
         result = []
         for i, section in enumerate(sections):
@@ -2492,8 +2534,10 @@ def create_app(storage):
         parts = []
         if state.show_find_panel and state.find_panel:
             parts.append(state.find_panel)
+            parts.append(Window(width=1, char="│", style="class:hint"))
         parts.append(editor_area)
         if state.show_keybindings:
+            parts.append(Window(width=1, char="│", style="class:hint"))
             parts.append(keybindings_panel)
         return VSplit(parts)
 
@@ -3011,6 +3055,16 @@ def create_app(storage):
         if filtered:
             open_project(filtered[0].id)
 
+    @kb.add("c-s", filter=is_projects & no_float)
+    def _(event):
+        now = time.monotonic()
+        if now - state.shutdown_pending < 2.0:
+            subprocess.Popen(['sudo', 'shutdown', 'now'])
+            event.app.exit()
+        else:
+            state.shutdown_pending = now
+            show_notification(state, "Press Ctrl+S again to shut down.", duration=2.0)
+
     # -- Editor screen --
     @kb.add("c-s", filter=is_editor & no_float)
     def _(event):
@@ -3058,7 +3112,8 @@ def create_app(storage):
         else:
             # Open the panel
             panel = FindReplacePanel(
-                editor_area.buffer, state, state.last_find_query)
+                editor_area.buffer, state, state.last_find_query,
+                editor_area=editor_area)
             state.find_panel = panel
             state.show_find_panel = True
             event.app.invalidate()
@@ -3172,7 +3227,8 @@ def create_app(storage):
                 def cmd_find():
                     if not state.show_find_panel or not state.find_panel:
                         panel = FindReplacePanel(
-                            editor_area.buffer, state, state.last_find_query)
+                            editor_area.buffer, state, state.last_find_query,
+                            editor_area=editor_area)
                         state.find_panel = panel
                         state.show_find_panel = True
                     get_app().invalidate()
