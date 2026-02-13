@@ -1406,13 +1406,24 @@ class MarkdownTextArea(TextArea):
         for b in list(TextArea.BINDINGS) + list(ScrollableContainer.BINDINGS)
     ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._ts_timer = None
+
     def _on_key(self, event) -> None:
         if event.key == "escape":
             return  # Let escape bubble up to the screen
         super()._on_key(event)
 
     def _build_highlight_map(self) -> None:
-        super()._build_highlight_map()
+        self._line_cache.clear()
+        self._highlights.clear()
+        self._apply_heading_highlights()
+        if self._ts_timer is not None:
+            self._ts_timer.stop()
+        self._ts_timer = self.set_timer(0.3, self._deferred_highlight)
+
+    def _apply_heading_highlights(self) -> None:
         highlights = self._highlights
         for i, line in enumerate(self.text.splitlines()):
             m = _HEADING_RE.match(line)
@@ -1420,6 +1431,11 @@ class MarkdownTextArea(TextArea):
                 marker_end = m.end(1)
                 highlights[i].append((0, marker_end, "heading.marker"))
                 highlights[i].append((marker_end + 1, len(line), "heading"))
+
+    def _deferred_highlight(self) -> None:
+        self._ts_timer = None
+        super()._build_highlight_map()
+        self._apply_heading_highlights()
 
 
 class KeybindingsPanel(Static):
@@ -1512,6 +1528,7 @@ class EditorScreen(Screen):
         super().__init__()
         self.project = project
         self._dirty = False
+        self._status_timer = None
 
     def compose(self) -> ComposeResult:
         yield MarkdownTextArea(
@@ -1558,8 +1575,9 @@ class EditorScreen(Screen):
 
     def _status_text(self) -> str:
         text = self.query_one("#editor", TextArea).text if self.is_mounted else self.project.content
-        wc = len(text.split()) if text.strip() else 0
-        return f" {self.project.name}  {wc} words"
+        body = re.sub(r"^---\n.*?\n---\n?", "", text, count=1, flags=re.DOTALL)
+        paras = sum(1 for p in re.split(r"\n\s*\n", body) if p.strip())
+        return f" {self.project.name}  {paras} ¶"
 
     def _set_status(self, text: str) -> None:
         try:
@@ -1573,15 +1591,24 @@ class EditorScreen(Screen):
     @on(TextArea.Changed, "#editor")
     def _on_text_change(self, event: TextArea.Changed) -> None:
         self._dirty = True
-        try:
-            self.query_one("#editor-status", Static).update(self._status_text())
-        except Exception:
-            pass
+        if self._status_timer is not None:
+            self._status_timer.stop()
+        self._status_timer = self.set_timer(0.5, self._update_status)
+
+    def _update_status(self) -> None:
+        self._status_timer = None
+        self._set_status(self._status_text())
 
     def _auto_save(self) -> None:
         if not self._dirty:
             return
-        self._do_save(notify=False)
+        self.project.content = self.query_one("#editor", TextArea).text
+        self._dirty = False
+        self.run_worker(self._save_in_background, exclusive=True)
+
+    async def _save_in_background(self) -> None:
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
+        app.storage.save_project(self.project)
 
     def _do_save(self, notify: bool = True) -> None:
         app: ManuscriptsApp = self.app  # type: ignore[assignment]
