@@ -2079,27 +2079,57 @@ class CommandPaletteDialog:
 
 
 class FindDialog:
-    """In-editor find dialog with live search and next-match cycling."""
+    """In-editor find/replace dialog with match cycling."""
 
     def __init__(self, editor_buf, last_query=""):
         self.future = asyncio.Future()
         self.editor_buf = editor_buf
+        self.matches = []
+        self.match_idx = -1
+        self.status_text = ""
+
         self.search_buf = Buffer(multiline=False)
+        self.replace_buf = Buffer(multiline=False)
         if last_query:
             self.search_buf.set_document(
                 Document(last_query, len(last_query)), bypass_readonly=True,
             )
-        self.status_text = ""
 
         search_kb = KeyBindings()
 
         @search_kb.add("enter")
         def _next(event):
-            self._find_next()
+            self._move(1)
+
+        @search_kb.add("s-enter")
+        def _prev(event):
+            self._move(-1)
 
         @search_kb.add("escape", eager=True)
         def _escape(event):
             self.cancel()
+
+        @search_kb.add("tab")
+        def _to_replace(event):
+            event.app.layout.focus(self.replace_window)
+
+        replace_kb = KeyBindings()
+
+        @replace_kb.add("enter")
+        def _do_replace(event):
+            self._replace_one()
+
+        @replace_kb.add("c-enter")
+        def _do_replace_all(event):
+            self._replace_all()
+
+        @replace_kb.add("escape", eager=True)
+        def _escape_r(event):
+            self.cancel()
+
+        @replace_kb.add("s-tab")
+        def _to_search(event):
+            event.app.layout.focus(self.search_window)
 
         self.search_control = BufferControl(
             buffer=self.search_buf, key_bindings=search_kb,
@@ -2107,16 +2137,24 @@ class FindDialog:
         self.search_window = Window(
             content=self.search_control, height=1, style="class:input",
         )
+        self.replace_control = BufferControl(
+            buffer=self.replace_buf, key_bindings=replace_kb,
+        )
+        self.replace_window = Window(
+            content=self.replace_control, height=1, style="class:input",
+        )
         self.status_control = FormattedTextControl(
             lambda: [("class:hint", self.status_text)],
         )
         self.search_buf.on_text_changed += self._on_changed
 
         self.dialog = Dialog(
-            title="Find",
+            title="Find & Replace",
             body=HSplit([
-                Label(text="Search:"),
+                Label(text="Find:"),
                 self.search_window,
+                Label(text="Replace:"),
+                self.replace_window,
                 Window(content=self.status_control, height=1),
             ]),
             buttons=[Button(text="Close", handler=self.cancel)],
@@ -2124,42 +2162,91 @@ class FindDialog:
             width=D(preferred=50),
         )
 
-    def _on_changed(self, buf):
-        self._find_from_current()
-
-    def _find_from_current(self):
+    def _rebuild_matches(self):
         query = self.search_buf.text
         if not query:
+            self.matches = []
+            self.match_idx = -1
             self.status_text = ""
-            get_app().invalidate()
             return
         text = self.editor_buf.text
-        lower_text = text.lower()
-        lower_query = query.lower()
-        pos = lower_text.find(lower_query, self.editor_buf.cursor_position)
-        if pos == -1:
-            pos = lower_text.find(lower_query, 0)
-        count = lower_text.count(lower_query)
-        if pos != -1:
-            self.editor_buf.cursor_position = pos
-            self.status_text = f" {count} match{'es' if count != 1 else ''}"
+        lq = query.lower()
+        lt = text.lower()
+        self.matches = []
+        start = 0
+        while True:
+            pos = lt.find(lq, start)
+            if pos == -1:
+                break
+            self.matches.append(pos)
+            start = pos + 1
+
+    def _on_changed(self, buf):
+        self._rebuild_matches()
+        if self.matches:
+            cur = self.editor_buf.cursor_position
+            self.match_idx = 0
+            for i, pos in enumerate(self.matches):
+                if pos >= cur:
+                    self.match_idx = i
+                    break
+            self.editor_buf.cursor_position = self.matches[self.match_idx]
+            n = len(self.matches)
+            self.status_text = f" {self.match_idx + 1} of {n} match{'es' if n != 1 else ''}"
         else:
+            self.match_idx = -1
+            if self.search_buf.text:
+                self.status_text = " No matches"
+            else:
+                self.status_text = ""
+        get_app().invalidate()
+
+    def _move(self, direction):
+        if not self.matches:
+            return
+        self.match_idx = (self.match_idx + direction) % len(self.matches)
+        self.editor_buf.cursor_position = self.matches[self.match_idx]
+        n = len(self.matches)
+        self.status_text = f" {self.match_idx + 1} of {n} match{'es' if n != 1 else ''}"
+        get_app().invalidate()
+
+    def _replace_one(self):
+        if not self.matches or self.match_idx < 0:
+            return
+        pos = self.matches[self.match_idx]
+        query = self.search_buf.text
+        replacement = self.replace_buf.text
+        text = self.editor_buf.text
+        new_text = text[:pos] + replacement + text[pos + len(query):]
+        self.editor_buf.set_document(
+            Document(new_text, pos + len(replacement)), bypass_readonly=True,
+        )
+        self._rebuild_matches()
+        if self.matches:
+            self.match_idx = min(self.match_idx, len(self.matches) - 1)
+            self.editor_buf.cursor_position = self.matches[self.match_idx]
+            n = len(self.matches)
+            self.status_text = f" {self.match_idx + 1} of {n} match{'es' if n != 1 else ''}"
+        else:
+            self.match_idx = -1
             self.status_text = " No matches"
         get_app().invalidate()
 
-    def _find_next(self):
+    def _replace_all(self):
         query = self.search_buf.text
-        if not query:
+        if not query or not self.matches:
             return
+        replacement = self.replace_buf.text
         text = self.editor_buf.text
-        lower_text = text.lower()
-        lower_query = query.lower()
-        start = self.editor_buf.cursor_position + 1
-        pos = lower_text.find(lower_query, start)
-        if pos == -1:
-            pos = lower_text.find(lower_query, 0)
-        if pos != -1:
-            self.editor_buf.cursor_position = pos
+        count = len(self.matches)
+        new_text = re.sub(re.escape(query), replacement, text, flags=re.IGNORECASE)
+        self.editor_buf.set_document(
+            Document(new_text, min(self.editor_buf.cursor_position, len(new_text))),
+            bypass_readonly=True,
+        )
+        self._rebuild_matches()
+        self.match_idx = -1
+        self.status_text = f" Replaced {count} occurrence{'s' if count != 1 else ''}"
         get_app().invalidate()
 
     def cancel(self):
@@ -2385,26 +2472,26 @@ def create_app(storage):
 
     def get_keybindings_text():
         sections = [
-            [("Esc", "Manuscripts"), ("^O", "Sources"), ("^P", "Commands"),
-             ("^Q", "Quit"), ("^S", "Save")],
+            [("Esc", "Manuscripts"), ("^O", "Sources"),
+             ("^P", "Commands"), ("^Q", "Quit"), ("^S", "Save")],
             [("^B", "Bold"), ("^I", "Italic"), ("^N", "Footnote"),
-             ("^R", "Cite"), ("^Z", "Undo"), ("^⇧Z", "Redo")],
-            [("^F", "Find"), ("^W", "Word/para"), ("^Up", "Top"),
-             ("^Down", "Bottom")],
-            [("^G", "This panel")],
+             ("^R", "Cite"), ("^F", "Find/Replace")],
+            [("^Z", "Undo"), ("^sZ", "Redo"),
+             ("^Up", "Top"), ("^Dn", "Bottom")],
+            [("^W", "Word/para"), ("^G", "This panel")],
         ]
         result = []
         for i, section in enumerate(sections):
             if i > 0:
                 result.append(("", "\n"))
             for key, desc in section:
-                result.append(("class:accent bold", f"  {key:>6}"))
+                result.append(("class:accent bold", f" {key:>4}"))
                 result.append(("", f"  {desc}\n"))
         return result
 
     keybindings_panel = Window(
         FormattedTextControl(get_keybindings_text),
-        width=26, style="class:keybindings-panel",
+        width=22, style="class:keybindings-panel",
     )
 
     def get_editor_body():
