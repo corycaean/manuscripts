@@ -1408,6 +1408,7 @@ class MarkdownTextArea(TextArea):
 
     def __init__(self, *args, **kwargs):
         self._ts_timer = None
+        self._last_line_count = 0
         super().__init__(*args, **kwargs)
 
     def _on_key(self, event) -> None:
@@ -1416,7 +1417,10 @@ class MarkdownTextArea(TextArea):
         super()._on_key(event)
 
     def _build_highlight_map(self) -> None:
-        self._line_cache.clear()
+        line_count = self.document.line_count
+        if line_count != self._last_line_count:
+            self._line_cache.clear()
+            self._last_line_count = line_count
         if self._ts_timer is not None:
             self._ts_timer.stop()
         self._ts_timer = self.set_timer(0.3, self._deferred_highlight)
