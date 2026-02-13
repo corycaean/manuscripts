@@ -1410,6 +1410,10 @@ class MarkdownTextArea(TextArea):
         self._ts_timer = None
         self._last_line_count = 0
         super().__init__(*args, **kwargs)
+        self.cursor_blink = False
+
+    def find_matching_bracket(self, bracket, cursor_at):
+        return None
 
     def _on_key(self, event) -> None:
         if event.key == "escape":
