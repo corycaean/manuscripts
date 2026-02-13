@@ -2979,8 +2979,8 @@ def create_app(storage):
         style=style,
         full_screen=True,
         mouse_support=False,
-        ttimeoutlen=0.05,
     )
+    app.ttimeoutlen = 0.05
 
     return app
 
