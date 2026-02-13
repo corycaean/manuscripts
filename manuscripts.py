@@ -1128,17 +1128,14 @@ class WordWrapProcessor(Processor):
             cum += pad
             boundaries.append((pos + 1, cum, pad))
 
-        prev_s2d = ti.source_to_display
-
         def source_to_display(i):
-            intermediate = prev_s2d(i)
             offset = 0
             for next_start, cum_pad, _ in boundaries:
-                if intermediate >= next_start:
+                if i >= next_start:
                     offset = cum_pad
                 else:
                     break
-            return intermediate + offset
+            return i + offset
 
         def display_to_source(i):
             prev_cum = 0
