@@ -1258,6 +1258,8 @@ class AppState:
         self.export_paths = []
         self.show_word_count = False
         self.last_find_query = ""
+        self.show_find_panel = False
+        self.find_panel = None
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -2078,37 +2080,50 @@ class CommandPaletteDialog:
         return self.dialog
 
 
-class FindDialog:
-    """In-editor find/replace dialog with match cycling."""
+class FindReplacePanel:
+    """Non-modal side panel for find/replace with match cycling."""
 
-    def __init__(self, editor_buf, last_query=""):
-        self.future = asyncio.Future()
+    def __init__(self, editor_buf, state, last_query=""):
         self.editor_buf = editor_buf
+        self.state = state
         self.matches = []
         self.match_idx = -1
         self.status_text = ""
 
-        self.search_buf = Buffer(multiline=False)
-        self.replace_buf = Buffer(multiline=False)
+        self.search_buf = Buffer(multiline=False, name="find-search")
+        self.replace_buf = Buffer(multiline=False, name="find-replace")
         if last_query:
             self.search_buf.set_document(
                 Document(last_query, len(last_query)), bypass_readonly=True,
             )
 
-        field_kb = KeyBindings()
+        search_kb = KeyBindings()
+        replace_kb = KeyBindings()
 
-        @field_kb.add("escape", eager=True)
-        def _escape(event):
-            self.cancel()
+        @search_kb.add("enter")
+        def _search_enter(event):
+            self._move(1)
+
+        @search_kb.add("tab")
+        def _search_tab(event):
+            get_app().layout.focus(self.replace_window)
+
+        @replace_kb.add("enter")
+        def _replace_enter(event):
+            self._replace_one()
+
+        @replace_kb.add("tab")
+        def _replace_tab(event):
+            self._replace_all()
 
         self.search_control = BufferControl(
-            buffer=self.search_buf, key_bindings=field_kb,
+            buffer=self.search_buf, key_bindings=search_kb,
         )
         self.search_window = Window(
             content=self.search_control, height=1, style="class:input",
         )
         self.replace_control = BufferControl(
-            buffer=self.replace_buf, key_bindings=field_kb,
+            buffer=self.replace_buf, key_bindings=replace_kb,
         )
         self.replace_window = Window(
             content=self.replace_control, height=1, style="class:input",
@@ -2118,27 +2133,27 @@ class FindDialog:
         )
         self.search_buf.on_text_changed += self._on_changed
 
-        self.dialog = Dialog(
-            title="Find & Replace",
-            body=HSplit([
-                Label(text="Find:"),
-                self.search_window,
-                VSplit([
-                    Button(text="Next", handler=lambda: self._move(1)),
-                    Button(text="Prev", handler=lambda: self._move(-1)),
-                ], padding=1),
-                Label(text="Replace:"),
-                self.replace_window,
-                VSplit([
-                    Button(text="Replace", handler=self._replace_one),
-                    Button(text="All", handler=self._replace_all),
-                ], padding=1),
-                Window(content=self.status_control, height=1),
-            ]),
-            buttons=[Button(text="Close", handler=self.cancel)],
-            modal=True,
-            width=D(preferred=50),
-        )
+        def get_hints():
+            return [
+                ("class:accent bold", "  Ret"), ("", "  Next/Repl\n"),
+                ("class:accent bold", "  Tab"), ("", "  Field/All\n"),
+                ("class:accent bold", "  ^F "), ("", "  Editor\n"),
+                ("class:accent bold", "  Esc"), ("", "  Close\n"),
+            ]
+
+        self.container = HSplit([
+            Window(FormattedTextControl(
+                [("class:accent bold", " Find/Replace\n")],
+            ), height=1),
+            Window(height=1, char="─", style="class:hint"),
+            Label(text=" Find:"),
+            self.search_window,
+            Window(content=self.status_control, height=1),
+            Label(text=" Replace:"),
+            self.replace_window,
+            Window(height=1),
+            Window(FormattedTextControl(get_hints), height=4),
+        ], width=28, style="class:find-panel")
 
     def _rebuild_matches(self):
         query = self.search_buf.text
@@ -2227,12 +2242,13 @@ class FindDialog:
         self.status_text = f" Replaced {count} occurrence{'s' if count != 1 else ''}"
         get_app().invalidate()
 
-    def cancel(self):
-        if not self.future.done():
-            self.future.set_result(self.search_buf.text)
+    def is_focused(self):
+        """Return True if any window in this panel has focus."""
+        cur = get_app().layout.current_window
+        return cur is self.search_window or cur is self.replace_window
 
     def __pt_container__(self):
-        return self.dialog
+        return self.container
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -2473,7 +2489,10 @@ def create_app(storage):
     )
 
     def get_editor_body():
-        parts = [editor_area]
+        parts = []
+        if state.show_find_panel and state.find_panel:
+            parts.append(state.find_panel)
+        parts.append(editor_area)
         if state.show_keybindings:
             parts.append(keybindings_panel)
         return VSplit(parts)
@@ -2627,6 +2646,9 @@ def create_app(storage):
         if state.auto_save_task:
             state.auto_save_task.cancel()
             state.auto_save_task = None
+        if state.show_find_panel and state.find_panel:
+            state.last_find_query = state.find_panel.search_buf.text
+        state.show_find_panel = False
         state.screen = "projects"
         state.current_project = None
         state.showing_exports = False
@@ -2841,6 +2863,12 @@ def create_app(storage):
             elif hasattr(dialog, 'future') and not dialog.future.done():
                 dialog.future.set_result(None)
         elif state.screen == "editor":
+            if state.show_find_panel and state.find_panel and state.find_panel.is_focused():
+                state.last_find_query = state.find_panel.search_buf.text
+                state.show_find_panel = False
+                event.app.layout.focus(editor_area)
+                event.app.invalidate()
+                return
             now = time.monotonic()
             if now - state.escape_pending < 2.0:
                 state.escape_pending = 0.0
@@ -3019,13 +3047,25 @@ def create_app(storage):
 
     @kb.add("c-f", filter=is_editor & no_float)
     def _(event):
-        async def _do():
-            dlg = FindDialog(editor_area.buffer, state.last_find_query)
-            result = await show_dialog_as_float(state, dlg)
-            if result is not None:
-                state.last_find_query = result
-
-        asyncio.ensure_future(_do())
+        if state.show_find_panel and state.find_panel:
+            if state.find_panel.is_focused():
+                # Panel focused -> switch to editor
+                state.last_find_query = state.find_panel.search_buf.text
+                event.app.layout.focus(editor_area)
+            else:
+                # Editor focused -> switch to panel
+                event.app.layout.focus(state.find_panel.search_window)
+        else:
+            # Open the panel
+            panel = FindReplacePanel(
+                editor_area.buffer, state, state.last_find_query)
+            state.find_panel = panel
+            state.show_find_panel = True
+            event.app.invalidate()
+            try:
+                event.app.layout.focus(panel.search_window)
+            except ValueError:
+                pass
 
     @kb.add("c-r", filter=is_editor & no_float)
     def _(event):
@@ -3129,11 +3169,17 @@ def create_app(storage):
                         state.storage.save_project(state.current_project)
                         show_notification(state, f"Imported {len(sources)} source(s).")
 
-                async def cmd_find():
-                    dlg = FindDialog(editor_area.buffer, state.last_find_query)
-                    result = await show_dialog_as_float(state, dlg)
-                    if result is not None:
-                        state.last_find_query = result
+                def cmd_find():
+                    if not state.show_find_panel or not state.find_panel:
+                        panel = FindReplacePanel(
+                            editor_area.buffer, state, state.last_find_query)
+                        state.find_panel = panel
+                        state.show_find_panel = True
+                    get_app().invalidate()
+                    try:
+                        get_app().layout.focus(state.find_panel.search_window)
+                    except ValueError:
+                        pass
 
                 cmds = [
                     ("Bibliography", "Insert bibliography", do_bibliography),
@@ -3247,6 +3293,7 @@ def create_app(storage):
         "select-list.selected": "bg:#444444",
         "select-list.empty": "#777777",
         "keybindings-panel": "bg:#2a2a2a",
+        "find-panel": "bg:#2a2a2a",
         "form-label": "#aaaaaa",
         "dialog": "#e0e0e0 bg:#2a2a2a",
         "dialog.body": "#e0e0e0 bg:#2a2a2a",
