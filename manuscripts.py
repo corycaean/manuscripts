@@ -36,7 +36,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout.containers import (
     ConditionalContainer, DynamicContainer, Float, FloatContainer,
-    HSplit, VSplit, Window,
+    HSplit, VSplit, Window, WindowAlign,
 )
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension as D
@@ -2315,7 +2315,12 @@ def create_app(storage):
     export_list = SelectableList()
     hints_control = FormattedTextControl(
         lambda: [("class:hint", " (n) New  (r) Rename  (d) Delete  (e) Exports  (/) Search")])
-    hints_window = Window(content=hints_control, height=1)
+    shutdown_hint_control = FormattedTextControl(
+        lambda: [("class:hint", "⌃S Shut down ")])
+    hints_window = VSplit([
+        Window(content=hints_control, height=1),
+        Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
+    ])
 
     def refresh_projects(query=""):
         state.projects = state.storage.list_projects()
