@@ -1,46 +1,21 @@
 #!/usr/bin/env bash
-# Set up vendored dependencies.
+# Set up dependencies for Manuscripts.
 #
-# Place these zip files alongside this script, then run it:
-#   - rich-master.zip
-#   - mdit-py-plugins-master.zip
-#   - textual-main.zip
-#
-# Or, if you have pip access:
-#   pip install "textual[syntax]"
-# and skip the vendor directory entirely (manuscripts.py imports normally).
+# Creates a virtual environment and installs prompt_toolkit + pygments.
+# If pip is not available, prompt_toolkit can also be vendored manually.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENDOR="${SCRIPT_DIR}/vendor"
 
-mkdir -p "${VENDOR}"
+echo "Setting up Manuscripts..."
 
-echo "Setting up vendored dependencies..."
-
-if [ -f "${SCRIPT_DIR}/rich-master.zip" ]; then
-    echo "  Unpacking Rich..."
-    unzip -qo "${SCRIPT_DIR}/rich-master.zip" -d "${VENDOR}/rich-tmp"
-    # Move package contents to vendor/rich (the package is rich-master/rich/)
-    rm -rf "${VENDOR}/rich"
-    mv "${VENDOR}/rich-tmp/rich-master" "${VENDOR}/rich"
-    rm -rf "${VENDOR}/rich-tmp"
+# Create venv if it doesn't exist
+if [ ! -d "${SCRIPT_DIR}/.venv" ]; then
+    echo "  Creating virtual environment..."
+    python3 -m venv "${SCRIPT_DIR}/.venv"
 fi
 
-if [ -f "${SCRIPT_DIR}/mdit-py-plugins-master.zip" ]; then
-    echo "  Unpacking mdit-py-plugins..."
-    unzip -qo "${SCRIPT_DIR}/mdit-py-plugins-master.zip" -d "${VENDOR}/mdit-tmp"
-    rm -rf "${VENDOR}/mdit-py-plugins"
-    mv "${VENDOR}/mdit-tmp/mdit-py-plugins-master" "${VENDOR}/mdit-py-plugins"
-    rm -rf "${VENDOR}/mdit-tmp"
-fi
-
-if [ -f "${SCRIPT_DIR}/textual-main.zip" ]; then
-    echo "  Unpacking Textual..."
-    unzip -qo "${SCRIPT_DIR}/textual-main.zip" -d "${VENDOR}/textual-tmp"
-    rm -rf "${VENDOR}/textual"
-    mv "${VENDOR}/textual-tmp/textual-main" "${VENDOR}/textual"
-    rm -rf "${VENDOR}/textual-tmp"
-fi
+echo "  Installing dependencies..."
+"${SCRIPT_DIR}/.venv/bin/pip" install --quiet prompt_toolkit pygments
 
 echo "Done. Run with: ./run.sh"

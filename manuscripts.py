@@ -3,7 +3,7 @@
 Manuscripts — A writing appliance for students.
 
 A Markdown editor with integrated source management, Chicago citation
-insertion, and PDF export.  Built on Textual.
+insertion, and PDF export.  Built on prompt_toolkit.
 
 Designed for write-decks running on Raspberry Pi, but works anywhere
 Python 3.9+ and a modern terminal are available.
@@ -11,6 +11,7 @@ Python 3.9+ and a modern terminal are available.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
@@ -19,33 +20,33 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
-from textual import on, work
-from textual.app import App, ComposeResult, SystemCommand
-from textual.binding import Binding
-from textual.command import DiscoveryHit, Hit, Hits, Provider
-from textual.containers import Horizontal, ScrollableContainer, Vertical, VerticalScroll
-from textual.reactive import reactive, var
-from textual.screen import ModalScreen, Screen
-from textual.widgets import (
-    Button,
-    Input,
-    ListItem,
-    ListView,
-    OptionList,
-    Static,
-    TextArea,
+from prompt_toolkit import Application
+from prompt_toolkit.application.current import get_app
+from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.document import Document
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout.containers import (
+    ConditionalContainer, DynamicContainer, Float, FloatContainer,
+    HSplit, VSplit, Window,
 )
-from textual.widgets.option_list import Option
-from textual.widgets.text_area import TextAreaTheme
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension as D
+from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.lexers import PygmentsLexer
+from prompt_toolkit.styles import Style as PtStyle
+from prompt_toolkit.widgets import Button, Dialog, Label, TextArea
 
-from rich.style import Style
+from pygments.lexer import RegexLexer, bygroups
+from pygments.token import Token
 
 # ════════════════════════════════════════════════════════════════════════
 #  Data Models
@@ -950,1528 +951,6 @@ SOURCE_FIELDS: dict[str, list[tuple[str, str]]] = {
 }
 
 
-# ════════════════════════════════════════════════════════════════════════
-#  Screens
-# ════════════════════════════════════════════════════════════════════════
-
-
-# ── Projects ──────────────────────────────────────────────────────────
-
-
-class ProjectsScreen(Screen):
-    """Landing screen: list of manuscripts + exports toggle."""
-
-    BINDINGS = [
-        Binding("n", "new_project", "New manuscript"),
-        Binding("r", "rename_project", "Rename"),
-        Binding("d", "delete_project", "Delete"),
-        Binding("e", "toggle_exports", "Exports"),
-        Binding("m", "mass_export_md", "Export all to .md", show=False),
-        Binding("q", "quit", "Quit", show=False),
-    ]
-
-    DEFAULT_CSS = """
-    #projects-view {
-        height: 1fr;
-    }
-    #exports-view {
-        height: 1fr;
-        display: none;
-    }
-    #exports-title {
-        color: #e0e0e0;
-        padding: 0 2;
-    }
-    #export-file-list {
-        margin: 1 2;
-        height: 1fr;
-    }
-    #projects-hints {
-        dock: bottom;
-        height: 1;
-        color: #777;
-        padding: 0 2;
-    }
-    #project-search {
-        margin: 0 2;
-    }
-    """
-
-    _HINTS_DEFAULT = "(n) New  (r) Rename  (d) Delete  (e) Exports"
-    _HINTS_MASS_MD = "(n) New  (r) Rename  (d) Delete  (e) Exports  (m) Export all to .md"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._showing_exports = False
-        self._export_paths: list[Path] = []
-        self._all_projects: list[Project] = []
-        self._filtered_projects: list[Project] = []
-        self._mass_export_pending = 0.0
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="projects-view"):
-            yield Static("Manuscripts", id="projects-title")
-            yield Input(placeholder="Search manuscripts… (Enter to open)", id="project-search")
-            yield OptionList(id="project-list")
-            yield Static(self._HINTS_DEFAULT, id="projects-hints")
-        with Vertical(id="exports-view"):
-            yield Static("Exports", id="exports-title")
-            yield OptionList(id="export-file-list")
-
-    def on_mount(self) -> None:
-        self._load_all_projects()
-        self._refresh_list()
-
-    def _load_all_projects(self) -> None:
-        """Read projects from disk into cache."""
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        self._all_projects = app.storage.list_projects()
-        app.projects = self._all_projects
-
-    def _refresh_list(self, filter_query: str = "") -> None:
-        ol: OptionList = self.query_one("#project-list", OptionList)
-        ol.clear_options()
-        self._filtered_projects = fuzzy_filter_projects(self._all_projects, filter_query)
-        for p in self._filtered_projects:
-            try:
-                mod = datetime.fromisoformat(p.modified).strftime("%b %d, %Y")
-            except (ValueError, TypeError):
-                mod = ""
-            ol.add_option(Option(f"{p.name}  ({mod})", id=p.id))
-        if not self._all_projects:
-            ol.add_option(Option("  No manuscripts yet — press n to create one.", id="__empty__"))
-        elif not self._filtered_projects:
-            ol.add_option(Option("  No matching manuscripts.", id="__empty__"))
-
-    def _refresh_exports(self) -> None:
-        ol: OptionList = self.query_one("#export-file-list", OptionList)
-        ol.clear_options()
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        export_dir = app.storage.exports_dir
-        files: list[Path] = []
-        for ext in ("*.pdf", "*.docx", "*.md"):
-            files.extend(export_dir.glob(ext))
-        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        self._export_paths = files
-        if not files:
-            ol.add_option(Option("  No exports yet.", id="__empty__"))
-        else:
-            for f in files:
-                try:
-                    mod = datetime.fromtimestamp(f.stat().st_mtime).strftime("%b %d, %Y %H:%M")
-                except (ValueError, OSError):
-                    mod = ""
-                size_kb = f.stat().st_size // 1024
-                ol.add_option(Option(f"{f.name}  ({mod}, {size_kb} KB)", id=str(f)))
-
-    @on(Input.Changed, "#project-search")
-    def _search_changed(self, event: Input.Changed) -> None:
-        self._refresh_list(filter_query=event.value)
-
-    @on(Input.Submitted, "#project-search")
-    def _search_submitted(self, event: Input.Submitted) -> None:
-        if self._filtered_projects:
-            p = self._filtered_projects[0]
-            app: ManuscriptsApp = self.app  # type: ignore[assignment]
-            project = app.storage.load_project(p.id)
-            if project:
-                app.push_screen(EditorScreen(project))
-
-    def on_key(self, event) -> None:
-        """Down arrow in search input moves focus to the project list."""
-        if event.key == "down":
-            focused = self.app.focused
-            search_input = self.query_one("#project-search", Input)
-            if focused is search_input:
-                ol = self.query_one("#project-list", OptionList)
-                ol.focus()
-                event.prevent_default()
-
-    @on(OptionList.OptionSelected, "#project-list")
-    def open_project(self, event: OptionList.OptionSelected) -> None:
-        if event.option_id == "__empty__":
-            return
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        project = app.storage.load_project(event.option_id)
-        if project:
-            app.push_screen(EditorScreen(project))
-
-    @on(OptionList.OptionSelected, "#export-file-list")
-    def open_export(self, event: OptionList.OptionSelected) -> None:
-        if event.option_id == "__empty__":
-            return
-        self._open_file(Path(event.option_id))
-
-    def _open_file(self, path: Path) -> None:
-        """Open a file with the system viewer, or print if PDF."""
-        if path.suffix.lower() == ".pdf":
-            printers = self._detect_printers()
-            if printers:
-                self.app.push_screen(PrinterPickerModal(printers, path))
-                return
-        try:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", str(path)])
-            else:
-                subprocess.Popen(["xdg-open", str(path)])
-        except Exception as exc:
-            self.notify(f"Could not open file: {exc}", severity="error")
-
-    @staticmethod
-    def _detect_printers() -> list[str]:
-        """Return list of available printer names via lpstat."""
-        try:
-            result = subprocess.run(
-                ["lpstat", "-a"], capture_output=True, text=True, timeout=5
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                return []
-            printers: list[str] = []
-            for line in result.stdout.strip().splitlines():
-                name = line.split()[0] if line.split() else ""
-                if name:
-                    printers.append(name)
-            return printers
-        except Exception:
-            return []
-
-    def action_new_project(self) -> None:
-        if self._showing_exports:
-            return
-        self.app.push_screen(NewProjectModal(), callback=self._on_project_created)
-
-    def _on_project_created(self, name: str | None) -> None:
-        if name:
-            app: ManuscriptsApp = self.app  # type: ignore[assignment]
-            project = app.storage.create_project(name)
-            app.push_screen(EditorScreen(project))
-
-    def action_delete_project(self) -> None:
-        if self._showing_exports:
-            return
-        ol: OptionList = self.query_one("#project-list", OptionList)
-        idx = ol.highlighted
-        if idx is not None and idx < len(self._filtered_projects):
-            project = self._filtered_projects[idx]
-            self.app.push_screen(
-                ConfirmModal(f"Delete '{project.name}'?"),
-                callback=lambda ok: self._do_delete(ok, project.id),
-            )
-
-    def _do_delete(self, ok: bool, pid: str) -> None:
-        if ok:
-            app: ManuscriptsApp = self.app  # type: ignore[assignment]
-            app.storage.delete_project(pid)
-            self._load_all_projects()
-            query = self.query_one("#project-search", Input).value
-            self._refresh_list(filter_query=query)
-            self.notify("Manuscript deleted.")
-
-    def action_rename_project(self) -> None:
-        if self._showing_exports:
-            return
-        ol: OptionList = self.query_one("#project-list", OptionList)
-        idx = ol.highlighted
-        if idx is not None and idx < len(self._filtered_projects):
-            project = self._filtered_projects[idx]
-            self.app.push_screen(
-                NewProjectModal(title="Rename", placeholder=project.name, button="Rename"),
-                callback=lambda name: self._do_rename(name, project.id),
-            )
-
-    def _do_rename(self, new_name: str | None, pid: str) -> None:
-        if not new_name:
-            return
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        project = app.storage.load_project(pid)
-        if project:
-            project.name = new_name
-            app.storage.save_project(project)
-            self._load_all_projects()
-            query = self.query_one("#project-search", Input).value
-            self._refresh_list(filter_query=query)
-            self.notify(f"Renamed to '{new_name}'.")
-
-    def action_toggle_exports(self) -> None:
-        pv = self.query_one("#projects-view")
-        ev = self.query_one("#exports-view")
-        self._showing_exports = not self._showing_exports
-        if self._showing_exports:
-            pv.styles.display = "none"
-            ev.styles.display = "block"
-            self._refresh_exports()
-            self.query_one("#export-file-list", OptionList).focus()
-        else:
-            ev.styles.display = "none"
-            pv.styles.display = "block"
-            self.query_one("#project-list", OptionList).focus()
-
-    def action_mass_export_md(self) -> None:
-        if self._showing_exports:
-            return
-        import time
-        now = time.monotonic()
-        if now - self._mass_export_pending < 2.0:
-            self._mass_export_pending = 0.0
-            self.query_one("#projects-hints", Static).update(self._HINTS_DEFAULT)
-            if not self._all_projects:
-                self.notify("No manuscripts to export.", severity="warning")
-                return
-            self._do_mass_export_md()
-        else:
-            self._mass_export_pending = now
-            self.query_one("#projects-hints", Static).update(self._HINTS_MASS_MD)
-            self.set_timer(2.0, self._reset_mass_export_hint)
-
-    def _reset_mass_export_hint(self) -> None:
-        if self._mass_export_pending:
-            self._mass_export_pending = 0.0
-            self.query_one("#projects-hints", Static).update(self._HINTS_DEFAULT)
-
-    @work(thread=True)
-    def _do_mass_export_md(self) -> None:
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        export_dir = app.storage.exports_dir
-        count = 0
-        for project in self._all_projects:
-            full = app.storage.load_project(project.id)
-            if not full or not full.content.strip():
-                continue
-            safe_name = re.sub(r'[^\w\s-]', '', full.name).strip().replace(' ', '_')[:50] or "export"
-            out = export_dir / f"{safe_name}.md"
-            with open(out, "w") as f:
-                f.write(full.content)
-            count += 1
-        self.app.call_from_thread(
-            self.notify,
-            f"Exported {count} manuscript{'s' if count != 1 else ''} as Markdown.",
-        )
-
-    def action_quit(self) -> None:
-        self.app.action_quit()
-
-
-# ── New‑project modal ─────────────────────────────────────────────────
-
-
-class NewProjectModal(ModalScreen[str | None]):
-    """Prompt for a project name (also used for rename)."""
-
-    DEFAULT_CSS = """
-    NewProjectModal {
-        align: center middle;
-    }
-    #new-project-box {
-        width: 60%;
-        max-width: 60;
-        height: auto;
-        max-height: 10;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
-
-    def __init__(self, title: str = "New Manuscript", placeholder: str = "Manuscript name…", button: str = "Create") -> None:
-        super().__init__()
-        self._title = title
-        self._placeholder = placeholder
-        self._button = button
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="new-project-box")
-        box.border_title = self._title
-        with box:
-            yield Input(placeholder=self._placeholder, id="project-name-input")
-            with Horizontal():
-                yield Button(self._button, id="btn-create")
-                yield Button("Cancel", id="btn-cancel")
-
-    def on_mount(self) -> None:
-        self.query_one("#project-name-input", Input).focus()
-
-    @on(Button.Pressed, "#btn-create")
-    def _create(self, event: Button.Pressed) -> None:
-        val = self.query_one("#project-name-input", Input).value.strip()
-        self.dismiss(val if val else None)
-
-    @on(Button.Pressed, "#btn-cancel")
-    def _cancel(self, event: Button.Pressed) -> None:
-        self.dismiss(None)
-
-    @on(Input.Submitted, "#project-name-input")
-    def _submit(self, event: Input.Submitted) -> None:
-        val = event.value.strip()
-        self.dismiss(val if val else None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-# ── Confirm modal ─────────────────────────────────────────────────────
-
-
-class ConfirmModal(ModalScreen[bool]):
-    DEFAULT_CSS = """
-    ConfirmModal {
-        align: center middle;
-    }
-    #confirm-box {
-        width: 60%;
-        max-width: 60;
-        height: auto;
-        max-height: 8;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    """
-    BINDINGS = [
-        Binding("y", "confirm_yes", "Yes", priority=True),
-        Binding("n", "confirm_no", "No", priority=True),
-        Binding("escape", "cancel", "Cancel", show=False),
-    ]
-
-    def __init__(self, question: str) -> None:
-        super().__init__()
-        self.question = question
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="confirm-box")
-        box.border_title = self.question
-        with box:
-            with Horizontal():
-                yield Button("(y) Yes", variant="error", id="btn-yes")
-                yield Button("(n) No", id="btn-no")
-
-    def on_mount(self) -> None:
-        self.query_one("#btn-no", Button).focus()
-
-    @on(Button.Pressed, "#btn-yes")
-    def _yes(self, event: Button.Pressed) -> None:
-        self.dismiss(True)
-
-    @on(Button.Pressed, "#btn-no")
-    def _no(self, event: Button.Pressed) -> None:
-        self.dismiss(False)
-
-    def action_confirm_yes(self) -> None:
-        self.dismiss(True)
-
-    def action_confirm_no(self) -> None:
-        self.dismiss(False)
-
-    def action_cancel(self) -> None:
-        self.dismiss(False)
-
-
-# ── Editor ────────────────────────────────────────────────────────────
-
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
-
-
-_MANUSCRIPTS_THEME = TextAreaTheme(
-    name="manuscripts",
-    base_style=Style(color="#e0e0e0", bgcolor="#2a2a2a"),
-    cursor_style=Style(color="#2a2a2a", bgcolor="#e0e0e0"),
-    cursor_line_style=Style(bgcolor="#333333"),
-    selection_style=Style(bgcolor="#444444"),
-    syntax_styles={
-        "bold": Style(bold=True),
-        "italic": Style(italic=True),
-        "strikethrough": Style(strike=True),
-        "inline_code": Style(color="#a0a0a0", bgcolor="#383838"),
-        "heading": Style(bold=True, color="#e0af68"),
-        "heading.marker": Style(color="#666666"),
-        "link.label": Style(color="#7aa2f7"),
-        "link.uri": Style(color="#666666"),
-    },
-)
-
-
-class MarkdownTextArea(TextArea):
-    """TextArea with combined heading + inline markdown highlighting.
-
-    All inherited TextArea bindings are re-declared as ``system=True``
-    so they stay functional but don't clutter the keybindings panel.
-    The curated set on EditorScreen is what the user sees instead.
-    """
-
-    BINDINGS = [
-        Binding(b.key, b.action, b.description, show=False, system=True)
-        for b in list(TextArea.BINDINGS) + list(ScrollableContainer.BINDINGS)
-    ]
-
-    def __init__(self, *args, **kwargs):
-        self._ts_timer = None
-        self._last_line_count = 0
-        super().__init__(*args, **kwargs)
-        self.cursor_blink = False
-
-    def find_matching_bracket(self, bracket, cursor_at):
-        return None
-
-    def _on_key(self, event) -> None:
-        if event.key == "escape":
-            return  # Let escape bubble up to the screen
-        super()._on_key(event)
-
-    def _build_highlight_map(self) -> None:
-        line_count = self.document.line_count
-        if line_count != self._last_line_count:
-            self._line_cache.clear()
-            self._last_line_count = line_count
-        if self._ts_timer is not None:
-            self._ts_timer.stop()
-        self._ts_timer = self.set_timer(0.3, self._deferred_highlight)
-
-    def _apply_heading_highlights(self) -> None:
-        highlights = self._highlights
-        for i, line in enumerate(self.text.splitlines()):
-            m = _HEADING_RE.match(line)
-            if m:
-                marker_end = m.end(1)
-                highlights[i].append((0, marker_end, "heading.marker"))
-                highlights[i].append((marker_end + 1, len(line), "heading"))
-
-    def _deferred_highlight(self) -> None:
-        self._ts_timer = None
-        super()._build_highlight_map()
-        self._apply_heading_highlights()
-        self.refresh()
-
-
-class KeybindingsPanel(Static):
-    """Custom keybindings panel with grouped sections."""
-
-    DEFAULT_CSS = """
-    KeybindingsPanel {
-        dock: right;
-        width: 26;
-        height: 1fr;
-        border-left: vkey $foreground 30%;
-        padding: 1 1;
-        overflow-y: auto;
-    }
-    """
-
-    def render(self):
-        from rich.table import Table
-        from rich.text import Text
-
-        key_style = "bold #e0af68"
-        hdr_style = "underline"
-        desc_style = ""
-
-        tbl = Table(
-            show_header=False, box=None, padding=(0, 1), expand=False
-        )
-        tbl.add_column(justify="right", style=key_style, no_wrap=True)
-        tbl.add_column(style=desc_style)
-
-        sections = [
-            ("", [
-                ("^M", "Manuscripts"),
-                ("^O", "Sources"),
-                ("^P", "Commands"),
-                ("^Q", "Quit"),
-                ("^S", "Save"),
-            ]),
-            ("", [
-                ("^B", "Bold"),
-                ("^I", "Italic"),
-                ("^N", "Footnote"),
-                ("^R", "Cite"),
-                ("^Z", "Undo"),
-                ("^Y", "Redo"),
-            ]),
-            ("", [
-                ("^Up", "Top of document"),
-                ("^Down", "Bottom of document"),
-            ]),
-            ("", [
-                ("^H", "This panel"),
-            ]),
-        ]
-
-        for i, (title, bindings) in enumerate(sections):
-            if i > 0:
-                tbl.add_row("", "")
-            if title:
-                tbl.add_row("", Text(title, style=hdr_style))
-            for key, desc in bindings:
-                tbl.add_row(key, desc)
-
-        return tbl
-
-
-class EditorScreen(Screen):
-    """The main writing screen."""
-
-    BINDINGS = [
-        # Hide inherited Screen bindings from keybindings panel
-        Binding("tab", "app.focus_next", "Focus Next", show=False, system=True),
-        Binding("shift+tab", "app.focus_previous", "Focus Previous", show=False, system=True),
-        # Functional keybindings (all system=True; display handled by KeybindingsPanel)
-        Binding("ctrl+b", "bold", "Bold", system=True),
-        Binding("ctrl+c", "noop", "Copy", system=True),
-        Binding("ctrl+i", "italic", "Italic", system=True),
-        Binding("ctrl+m", "close_project", "Return to manuscripts", system=True),
-        Binding("ctrl+n", "footnote", "Insert blank footnote", system=True),
-        Binding("ctrl+o", "sources", "Sources", system=True),
-        Binding("ctrl+p", "command_palette", "Command Palette", system=True),
-        Binding("ctrl+r", "cite", "Insert reference", system=True),
-        Binding("ctrl+s", "save", "Save", system=True),
-        Binding("ctrl+v", "noop", "Paste", system=True),
-        Binding("ctrl+x", "noop", "Cut", system=True),
-        Binding("ctrl+z", "noop", "Undo", system=True),
-        Binding("ctrl+up", "jump_top", "Jump to top", system=True),
-        Binding("ctrl+down", "jump_bottom", "Jump to bottom", system=True),
-        Binding("ctrl+h", "toggle_help", "Keybindings", system=True),
-        Binding("shift+arrows", "noop", "Select text", system=True),
-    ]
-
-    AUTO_SAVE_SECONDS = 30.0
-
-    def __init__(self, project: Project) -> None:
-        super().__init__()
-        self.project = project
-        self._dirty = False
-        self._status_timer = None
-
-    def compose(self) -> ComposeResult:
-        yield MarkdownTextArea(
-            self.project.content,
-            id="editor",
-            soft_wrap=True,
-            show_line_numbers=False,
-            tab_behavior="indent",
-        )
-        yield Static(self._status_text(), id="editor-status")
-
-    def on_mount(self) -> None:
-        ta = self.query_one("#editor", TextArea)
-        self._register_markdown_language(ta)
-        ta.focus()
-        self.set_interval(self.AUTO_SAVE_SECONDS, self._auto_save)
-
-    @staticmethod
-    def _register_markdown_language(ta: TextArea) -> None:
-        """Register markdown with the inline grammar for bold/italic highlighting."""
-        ta.register_theme(_MANUSCRIPTS_THEME)
-        ta.theme = "manuscripts"
-        try:
-            from tree_sitter import Language as TSLanguage
-            from tree_sitter_markdown import inline_language
-            lang = TSLanguage(inline_language())
-            highlight_query = (
-                "(strong_emphasis) @bold\n"
-                "(emphasis) @italic\n"
-                "(strikethrough) @strikethrough\n"
-                "(code_span) @inline_code\n"
-                "(inline_link (link_text) @link.label)\n"
-                "(inline_link (link_destination) @link.uri)\n"
-                "(shortcut_link (link_text) @link.label)\n"
-                "(full_reference_link (link_text) @link.label)\n"
-                "(full_reference_link (link_label) @link.label)\n"
-                "(image (image_description) @link.label)\n"
-                "(image (link_destination) @link.uri)\n"
-            )
-            ta.register_language("markdown_inline", lang, highlight_query)
-            ta.language = "markdown_inline"
-        except ImportError:
-            pass
-
-    def _status_text(self) -> str:
-        text = self.query_one("#editor", TextArea).text if self.is_mounted else self.project.content
-        body = re.sub(r"^---\n.*?\n---\n?", "", text, count=1, flags=re.DOTALL)
-        paras = sum(1 for p in re.split(r"\n\s*\n", body) if p.strip())
-        return f" {self.project.name}  {paras} ¶"
-
-    def _set_status(self, text: str) -> None:
-        try:
-            self.query_one("#editor-status", Static).update(text)
-        except Exception:
-            pass
-
-    def _restore_status(self) -> None:
-        self._set_status(self._status_text())
-
-    @on(TextArea.Changed, "#editor")
-    def _on_text_change(self, event: TextArea.Changed) -> None:
-        self._dirty = True
-        if self._status_timer is not None:
-            self._status_timer.stop()
-        self._status_timer = self.set_timer(0.5, self._update_status)
-
-    def _update_status(self) -> None:
-        self._status_timer = None
-        self._set_status(self._status_text())
-
-    def _auto_save(self) -> None:
-        if not self._dirty:
-            return
-        self.project.content = self.query_one("#editor", TextArea).text
-        self._dirty = False
-        self.run_worker(self._save_in_background, exclusive=True)
-
-    async def _save_in_background(self) -> None:
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        app.storage.save_project(self.project)
-
-    def _do_save(self, notify: bool = True) -> None:
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        self.project.content = self.query_one("#editor", TextArea).text
-        app.storage.save_project(self.project)
-        self._dirty = False
-        if notify:
-            self.notify("Saved.")
-
-    # ── actions ────────────────────────────────────────────────────────
-
-    def action_noop(self) -> None:
-        """No-op action for display-only bindings."""
-        pass
-
-    def action_jump_top(self) -> None:
-        ta = self.query_one("#editor", TextArea)
-        ta.move_cursor((0, 0))
-
-    def action_jump_bottom(self) -> None:
-        ta = self.query_one("#editor", TextArea)
-        last_line = ta.document.line_count - 1
-        last_col = len(ta.document.get_line(last_line))
-        ta.move_cursor((last_line, last_col))
-
-    def action_toggle_help(self) -> None:
-        """Toggle the keybindings panel."""
-        existing = self.screen.query("KeybindingsPanel")
-        if existing:
-            existing.remove()
-        else:
-            self.screen.mount(KeybindingsPanel())
-
-    def action_save(self) -> None:
-        self._do_save()
-
-    def action_close_project(self) -> None:
-        self._do_save(notify=False)
-        self.app.pop_screen()
-        # Refresh the projects list if it's still there
-        try:
-            ps = self.app.query_one(ProjectsScreen)
-            ps._load_all_projects()
-            ps._refresh_list()
-        except Exception:
-            pass
-
-    def action_bold(self) -> None:
-        ta = self.query_one("#editor", TextArea)
-        sel = ta.selected_text
-        if sel:
-            ta.replace(f"**{sel}**", *ta.selection)
-        else:
-            loc = ta.cursor_location
-            ta.insert("****")
-            # Move cursor between the asterisks
-            row, col = ta.cursor_location
-            ta.cursor_location = (row, col - 2)
-
-    def action_italic(self) -> None:
-        ta = self.query_one("#editor", TextArea)
-        sel = ta.selected_text
-        if sel:
-            ta.replace(f"*{sel}*", *ta.selection)
-        else:
-            ta.insert("**")
-            row, col = ta.cursor_location
-            ta.cursor_location = (row, col - 1)
-
-    def action_footnote(self) -> None:
-        ta = self.query_one("#editor", TextArea)
-        ta.insert("^[]")
-        row, col = ta.cursor_location
-        ta.cursor_location = (row, col - 1)
-
-    def action_cite(self) -> None:
-        sources = self.project.get_sources()
-        if not sources:
-            self.notify("No sources. Open Sources from the command palette (Ctrl+P) first.", severity="warning")
-            return
-        self.app.push_screen(
-            CitePickerModal(sources),
-            callback=self._insert_citation,
-        )
-
-    def _insert_citation(self, footnote_text: str | None) -> None:
-        if footnote_text:
-            ta = self.query_one("#editor", TextArea)
-            ta.insert(footnote_text)
-
-    def action_bibliography(self) -> None:
-        sources = self.project.get_sources()
-        if not sources:
-            self.notify("No sources. Open Sources from the command palette (Ctrl+P) first.", severity="warning")
-            return
-        sorted_sources = sorted(sources, key=lambda s: s.author.split()[-1] if s.author else "")
-        lines = ["## Bibliography", ""]
-        for s in sorted_sources:
-            lines.append(s.to_chicago_bibliography())
-            lines.append("")
-        ta = self.query_one("#editor", TextArea)
-        ta.insert("\n".join(lines))
-        self.notify("Bibliography inserted.")
-
-    def action_sources(self) -> None:
-        self._do_save(notify=False)
-        self.app.push_screen(
-            SourcesModal(self.project),
-            callback=self._on_sources_closed,
-        )
-
-    def _on_sources_closed(self, _result: None) -> None:
-        # Reload project in case sources changed
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        reloaded = app.storage.load_project(self.project.id)
-        if reloaded:
-            self.project = reloaded
-
-    def action_import_bib(self) -> None:
-        self.app.push_screen(
-            BibImportModal(),
-            callback=self._on_bib_imported,
-        )
-
-    def _on_bib_imported(self, sources: list[Source] | None) -> None:
-        if sources:
-            for s in sources:
-                self.project.add_source(s)
-            app: ManuscriptsApp = self.app  # type: ignore[assignment]
-            app.storage.save_project(self.project)
-            self.notify(f"Imported {len(sources)} source(s).")
-
-    # ── YAML frontmatter insertion ──────────────────────────────────
-
-    _FRONTMATTER_PROPS = ["title", "author", "instructor", "date", "spacing", "style"]
-
-    def action_insert_frontmatter(self) -> None:
-        """Insert all missing YAML frontmatter properties at once."""
-        ta = self.query_one("#editor", TextArea)
-        text = ta.text
-        m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
-        if m:
-            existing = set()
-            for line in m.group(1).split("\n"):
-                idx = line.find(":")
-                if idx > 0:
-                    existing.add(line[:idx].strip())
-            missing = [p for p in self._FRONTMATTER_PROPS if p not in existing]
-            if not missing:
-                self.notify("All frontmatter properties already present.", severity="warning")
-                return
-            new_lines = "\n".join(f"{p}: " for p in missing)
-            end_pos = m.end(1)
-            new_text = text[:end_pos] + "\n" + new_lines + text[end_pos:]
-        else:
-            block = "\n".join(f"{p}: " for p in self._FRONTMATTER_PROPS)
-            new_text = f"---\n{block}\n---\n" + text
-        ta.clear()
-        ta.insert(new_text)
-        self.notify("Frontmatter inserted.")
-
-    # ── Export ───────────────────────────────────────────────────────
-
-    def action_export_pdf(self) -> None:
-        self._do_save(notify=False)
-        self.app.push_screen(
-            ExportFormatModal(),
-            callback=self._on_export_format_chosen,
-        )
-
-    def _on_export_format_chosen(self, fmt: str | None) -> None:
-        if fmt:
-            self._run_export(fmt)
-
-    @work(thread=True)
-    def _run_export(self, export_format: str = "pdf") -> None:
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        export_dir = app.storage.exports_dir
-        safe_name = re.sub(r'[^\w\s-]', '', self.project.name).strip().replace(' ', '_')[:50] or "export"
-
-        # Markdown-only export — no external tools needed
-        if export_format == "md":
-            out = export_dir / f"{safe_name}.md"
-            with open(out, "w") as f:
-                f.write(self.project.content)
-            self.app.call_from_thread(self._set_status, f" Exported: {out.name}")
-            return
-
-        # 1. Parse YAML frontmatter
-        yaml = parse_yaml_frontmatter(self.project.content)
-
-        # 2. Detect external tools
-        pandoc = detect_pandoc()
-        if not pandoc:
-            self.app.call_from_thread(
-                self.notify,
-                "Pandoc not found. Install pandoc for export.",
-                severity="warning",
-            )
-            return
-
-        if export_format == "pdf":
-            libreoffice = detect_libreoffice()
-            if not libreoffice:
-                self.app.call_from_thread(
-                    self.notify,
-                    "LibreOffice not found. Install LibreOffice for PDF export.",
-                    severity="warning",
-                )
-                return
-        else:
-            libreoffice = None
-
-        # 3. Resolve reference doc
-        ref_doc = resolve_reference_doc(yaml)
-        if not ref_doc:
-            self.app.call_from_thread(
-                self.notify,
-                "No reference .docx found in refs/ directory.",
-                severity="error",
-            )
-            return
-
-        # Temp file paths
-        md_path = export_dir / f"{self.project.id}.md"
-        lua_path = export_dir / f"{self.project.id}_filter.lua"
-        docx_path = export_dir / f"{safe_name}.docx"
-        pdf_path = export_dir / f"{safe_name}.pdf"
-
-        try:
-            # 4. Write content
-            with open(md_path, "w") as f:
-                f.write(self.project.content)
-
-            # 5. Generate Lua filter
-            lua_code = _generate_lua_filter(yaml)
-            with open(lua_path, "w") as f:
-                f.write(lua_code)
-
-            # 6. Build pandoc command
-            pandoc_args = [
-                pandoc,
-                str(md_path),
-                "--standalone",
-                f"--reference-doc={ref_doc}",
-                f"--lua-filter={lua_path}",
-            ]
-            if "bibliography" in yaml:
-                pandoc_args.append("--citeproc")
-            pandoc_args.extend(["-o", str(docx_path)])
-
-            if export_format == "pdf":
-                self.app.call_from_thread(self._set_status, " Exporting… (1/3) Running pandoc")
-            else:
-                self.app.call_from_thread(self._set_status, " Exporting… (1/2) Running pandoc")
-
-            result = subprocess.run(
-                pandoc_args, capture_output=True, text=True, timeout=60
-            )
-            if result.returncode != 0:
-                self.app.call_from_thread(
-                    self._set_status,
-                    f" Export failed: pandoc error",
-                )
-                return
-
-            # 7. Post-process DOCX (non-fatal)
-            if export_format == "pdf":
-                self.app.call_from_thread(self._set_status, " Exporting… (2/3) Post-processing")
-            else:
-                self.app.call_from_thread(self._set_status, " Exporting… (2/2) Post-processing")
-            try:
-                _postprocess_docx(str(docx_path), yaml)
-            except Exception:
-                pass
-
-            if export_format == "docx":
-                self.app.call_from_thread(self._set_status, f" Exported: {docx_path.name}")
-                return
-
-            # 8. Run LibreOffice (PDF only)
-            self.app.call_from_thread(self._set_status, " Exporting… (3/3) Converting to PDF")
-            lo_args = [
-                libreoffice,
-                "--headless",
-                "--convert-to", "pdf",
-                "--outdir", str(export_dir),
-                str(docx_path),
-            ]
-            result = subprocess.run(
-                lo_args, capture_output=True, text=True, timeout=60
-            )
-            if result.returncode != 0:
-                self.app.call_from_thread(
-                    self._set_status,
-                    " Export failed: LibreOffice error",
-                )
-                return
-
-            self.app.call_from_thread(self._set_status, f" Exported: {pdf_path.name}")
-
-        except subprocess.TimeoutExpired:
-            self.app.call_from_thread(
-                self._set_status, " Export failed: timed out"
-            )
-        except Exception as exc:
-            self.app.call_from_thread(
-                self._set_status,
-                f" Export failed: {str(exc)[:80]}",
-            )
-        finally:
-            # Clean up intermediate files (keep the final output)
-            cleanup = [md_path, lua_path]
-            if export_format == "pdf":
-                cleanup.append(docx_path)
-            for p in cleanup:
-                try:
-                    if p.exists():
-                        p.unlink()
-                except OSError:
-                    pass
-
-
-# ── Export format modal ───────────────────────────────────────────────
-
-
-class ExportFormatModal(ModalScreen[str | None]):
-    """Pick an export format: PDF, DOCX, or Markdown."""
-
-    DEFAULT_CSS = """
-    ExportFormatModal {
-        align: center middle;
-    }
-    #export-box {
-        width: 40;
-        height: auto;
-        max-height: 10;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="export-box")
-        box.border_title = "Export as"
-        with box:
-            yield OptionList(
-                Option("PDF (.pdf)", id="pdf"),
-                Option("Word (.docx)", id="docx"),
-                Option("Markdown (.md)", id="md"),
-                id="export-options",
-            )
-
-    def on_mount(self) -> None:
-        self.query_one("#export-options", OptionList).focus()
-
-    @on(OptionList.OptionSelected, "#export-options")
-    def _select(self, event: OptionList.OptionSelected) -> None:
-        self.dismiss(event.option_id)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-# ── Printer picker modal ──────────────────────────────────────────────
-
-
-class PrinterPickerModal(ModalScreen[str | None]):
-    """Pick a printer from available system printers."""
-
-    DEFAULT_CSS = """
-    PrinterPickerModal {
-        align: center middle;
-    }
-    #printer-box {
-        width: 60%;
-        max-width: 60;
-        height: auto;
-        max-height: 16;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    #printer-list {
-        height: auto;
-        max-height: 10;
-    }
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
-
-    def __init__(self, printers: list[str], file_path: Path) -> None:
-        super().__init__()
-        self._printers = printers
-        self._file_path = file_path
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="printer-box")
-        box.border_title = "Print to"
-        with box:
-            ol = OptionList(id="printer-list")
-            for p in self._printers:
-                ol.add_option(Option(p, id=p))
-            yield ol
-
-    def on_mount(self) -> None:
-        self.query_one("#printer-list", OptionList).focus()
-
-    @on(OptionList.OptionSelected, "#printer-list")
-    def _select(self, event: OptionList.OptionSelected) -> None:
-        printer_name = event.option_id
-        try:
-            subprocess.Popen(["lp", "-d", printer_name, "-o", "sides=two-sided-long-edge", str(self._file_path)])
-            self.notify(f"Sent to {printer_name}.")
-        except Exception as exc:
-            self.notify(f"Print failed: {exc}", severity="error")
-        self.dismiss(printer_name)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-# ── Citation picker modal ─────────────────────────────────────────────
-
-
-class CitePickerModal(ModalScreen[str | None]):
-    """Fuzzy‑search sources and pick one to insert as a footnote."""
-
-    DEFAULT_CSS = """
-    CitePickerModal {
-        align: center middle;
-    }
-    #cite-box {
-        width: 95%;
-        max-width: 100;
-        height: 90%;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    #cite-results {
-        height: 1fr;
-    }
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
-
-    def __init__(self, sources: list[Source]) -> None:
-        super().__init__()
-        self.all_sources = sources
-        self.filtered: list[Source] = list(sources)
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="cite-box")
-        box.border_title = "Insert Citation"
-        with box:
-            yield Input(placeholder="Search sources…", id="cite-search")
-            yield OptionList(id="cite-results")
-
-    def on_mount(self) -> None:
-        self._update_results("")
-        self.query_one("#cite-search", Input).focus()
-
-    @on(Input.Changed, "#cite-search")
-    def _search_changed(self, event: Input.Changed) -> None:
-        self._update_results(event.value)
-
-    def _update_results(self, query: str) -> None:
-        self.filtered = fuzzy_filter(self.all_sources, query)
-        ol: OptionList = self.query_one("#cite-results", OptionList)
-        ol.clear_options()
-        for s in self.filtered:
-            ol.add_option(Option(f"{s.author} ({s.year}) — {s.title}", id=s.id))
-        if self.filtered:
-            ol.highlighted = 0
-
-    def on_key(self, event) -> None:
-        """Down arrow in search input moves focus to the option list."""
-        if event.key == "down":
-            focused = self.app.focused
-            search_input = self.query_one("#cite-search", Input)
-            if focused is search_input:
-                ol = self.query_one("#cite-results", OptionList)
-                ol.focus()
-                event.prevent_default()
-
-    @on(OptionList.OptionSelected, "#cite-results")
-    def _select(self, event: OptionList.OptionSelected) -> None:
-        # Find the source
-        for s in self.filtered:
-            if s.id == event.option_id:
-                self.dismiss(s.to_chicago_footnote())
-                return
-        self.dismiss(None)
-
-    @on(Input.Submitted, "#cite-search")
-    def _submit_search(self, event: Input.Submitted) -> None:
-        """Enter in search field picks the highlighted result (default to first)."""
-        ol: OptionList = self.query_one("#cite-results", OptionList)
-        idx = ol.highlighted
-        if idx is None and self.filtered:
-            idx = 0
-        if idx is not None and idx < len(self.filtered):
-            s = self.filtered[idx]
-            self.dismiss(s.to_chicago_footnote())
-            return
-        self.dismiss(None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-# ── Sources modal ─────────────────────────────────────────────────────
-
-
-class SourcesModal(ModalScreen[None]):
-    """View / add / delete sources for a project."""
-
-    DEFAULT_CSS = """
-    SourcesModal {
-        align: center middle;
-    }
-    #sources-box {
-        width: 80%;
-        max-width: 90;
-        height: 80%;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    #source-list {
-        height: 1fr;
-    }
-    .sources-buttons {
-        height: auto;
-        dock: bottom;
-    }
-    .sources-buttons Button {
-        margin-right: 1;
-    }
-    """
-
-    BINDINGS = [
-        Binding("a", "add_source", "Add", priority=True),
-        Binding("d", "delete_source", "Delete", priority=True),
-        Binding("i", "import_sources", "Import", priority=True),
-        Binding("escape", "close", "Close", show=False),
-    ]
-
-    def __init__(self, project: Project) -> None:
-        super().__init__()
-        self.project = project
-        self._delete_pending = 0.0
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="sources-box")
-        box.border_title = f"Sources: {self.project.name}"
-        with box:
-            yield OptionList(id="source-list")
-            with Horizontal(classes="sources-buttons"):
-                yield Button("(a) Add", id="btn-add")
-                yield Button("(i) Import", id="btn-import")
-                yield Button("(d) Delete", variant="error", id="btn-del")
-                yield Button("(Esc) Close", id="btn-close")
-
-    def on_mount(self) -> None:
-        self._refresh_list()
-        self.query_one("#btn-add", Button).focus()
-
-    def _refresh_list(self) -> None:
-        ol: OptionList = self.query_one("#source-list", OptionList)
-        ol.clear_options()
-        sources = self.project.get_sources()
-        if not sources:
-            ol.add_option(Option("  No sources yet — press a to add one.", id="__empty__"))
-        else:
-            for s in sources:
-                ol.add_option(
-                    Option(f"{s.author} ({s.year}) — {s.title}", id=s.id)
-                )
-
-    @on(Button.Pressed, "#btn-add")
-    def _btn_add(self, event: Button.Pressed) -> None:
-        self.action_add_source()
-
-    @on(Button.Pressed, "#btn-del")
-    def _btn_del(self, event: Button.Pressed) -> None:
-        self.action_delete_source()
-
-    @on(Button.Pressed, "#btn-import")
-    def _btn_import(self, event: Button.Pressed) -> None:
-        self.action_import_sources()
-
-    @on(Button.Pressed, "#btn-close")
-    def _btn_close(self, event: Button.Pressed) -> None:
-        self.action_close()
-
-    def action_add_source(self) -> None:
-        self.app.push_screen(
-            SourceFormModal(),
-            callback=self._on_source_added,
-        )
-
-    def _on_source_added(self, source: Source | None) -> None:
-        if source:
-            self.project.add_source(source)
-            app: ManuscriptsApp = self.app  # type: ignore[assignment]
-            app.storage.save_project(self.project)
-            self._refresh_list()
-            self.notify(f"Added: {source.author}")
-
-    def action_delete_source(self) -> None:
-        ol: OptionList = self.query_one("#source-list", OptionList)
-        idx = ol.highlighted
-        sources = self.project.get_sources()
-        if idx is None or idx >= len(sources):
-            return
-        import time
-        now = time.monotonic()
-        if now - self._delete_pending < 2.0:
-            self._delete_pending = 0.0
-            self.query_one("#btn-del", Button).label = "(d) Delete"
-            s = sources[idx]
-            self.project.remove_source(s.id)
-            app: ManuscriptsApp = self.app  # type: ignore[assignment]
-            app.storage.save_project(self.project)
-            self._refresh_list()
-            self.notify("Source deleted.")
-        else:
-            self._delete_pending = now
-            self.query_one("#btn-del", Button).label = "(d) Confirm?"
-            self.set_timer(2.0, self._reset_delete_hint)
-
-    def _reset_delete_hint(self) -> None:
-        if self._delete_pending:
-            self._delete_pending = 0.0
-            self.query_one("#btn-del", Button).label = "(d) Delete"
-
-    def action_import_sources(self) -> None:
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        other_projects = [
-            p for p in app.storage.list_projects() if p.id != self.project.id
-        ]
-        if not other_projects:
-            self.notify("No other manuscripts to import from.", severity="warning")
-            return
-        self.app.push_screen(
-            ImportSourcesModal(other_projects),
-            callback=self._on_sources_imported,
-        )
-
-    def _on_sources_imported(self, sources: list[Source] | None) -> None:
-        if not sources:
-            return
-        existing = self.project.get_sources()
-        existing_keys = {(s.author, s.title, s.year) for s in existing}
-        added = 0
-        for s in sources:
-            if (s.author, s.title, s.year) not in existing_keys:
-                s.id = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + f"_{added}"
-                self.project.add_source(s)
-                existing_keys.add((s.author, s.title, s.year))
-                added += 1
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        app.storage.save_project(self.project)
-        self._refresh_list()
-        skipped = len(sources) - added
-        msg = f"Imported {added} source(s)."
-        if skipped:
-            msg += f" {skipped} duplicate(s) skipped."
-        self.notify(msg)
-
-    def action_close(self) -> None:
-        self.dismiss(None)
-
-
-# ── Source form modal ─────────────────────────────────────────────────
-
-
-class SourceFormModal(ModalScreen[Source | None]):
-    """Form for adding a new source.
-
-    All three field sets are pre-built in compose() with unique IDs
-    (e.g. field-book-author, field-article-author) to avoid the crash
-    caused by dynamically destroying/recreating widgets with shared IDs.
-    Only the active type's container is visible.
-    """
-
-    DEFAULT_CSS = """
-    SourceFormModal {
-        align: center middle;
-    }
-    #source-form-box {
-        width: 95%;
-        max-width: 100;
-        height: 90%;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    #source-type-bar {
-        height: auto;
-        margin-bottom: 0;
-    }
-    #source-type-bar Button {
-        margin-right: 1;
-    }
-    #source-fields {
-        height: 1fr;
-    }
-    .book-field, .book_section-field, .article-field, .website-field {
-        display: none;
-    }
-    .form-buttons {
-        height: auto;
-        margin-top: 0;
-        display: none;
-    }
-    .form-buttons Button {
-        margin-right: 1;
-    }
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.current_type = ""
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="source-form-box")
-        box.border_title = "Add Source"
-        with box:
-            with Horizontal(id="source-type-bar"):
-                yield Button("(b) Book", id="btn-type-book")
-                yield Button("(s) Section", id="btn-type-book_section")
-                yield Button("(a) Article", id="btn-type-article")
-                yield Button("(w) Website", id="btn-type-website")
-            with VerticalScroll(id="source-fields"):
-                for stype in SOURCE_TYPES:
-                    for field_key, label in SOURCE_FIELDS[stype]:
-                        yield Input(placeholder=label, id=f"field-{stype}-{field_key}", classes=f"{stype}-field")
-            with Horizontal(classes="form-buttons"):
-                yield Button("Save", id="btn-save")
-                yield Button("Cancel", id="btn-form-cancel")
-
-    def on_key(self, event) -> None:
-        if isinstance(self.app.focused, Input):
-            return
-        shortcuts = {"b": "book", "s": "book_section", "a": "article", "w": "website"}
-        if event.key in shortcuts:
-            self._switch_type(shortcuts[event.key])
-            event.prevent_default()
-
-    def _switch_type(self, stype: str) -> None:
-        self.current_type = stype
-        # Update button variants
-        for t in SOURCE_TYPES:
-            btn = self.query_one(f"#btn-type-{t}", Button)
-            btn.variant = "primary" if t == stype else "default"
-        # Show the right fields, hide others
-        for t in SOURCE_TYPES:
-            for w in self.query(f".{t}-field"):
-                w.styles.display = "block" if t == stype else "none"
-        # Show form buttons
-        self.query_one(".form-buttons").styles.display = "block"
-        # Focus the first input
-        first_input = self.query_one(f"#field-{stype}-{SOURCE_FIELDS[stype][0][0]}", Input)
-        first_input.focus()
-
-    @on(Button.Pressed, "#btn-type-book")
-    def _type_book(self, event: Button.Pressed) -> None:
-        self._switch_type("book")
-
-    @on(Button.Pressed, "#btn-type-book_section")
-    def _type_book_section(self, event: Button.Pressed) -> None:
-        self._switch_type("book_section")
-
-    @on(Button.Pressed, "#btn-type-article")
-    def _type_article(self, event: Button.Pressed) -> None:
-        self._switch_type("article")
-
-    @on(Button.Pressed, "#btn-type-website")
-    def _type_website(self, event: Button.Pressed) -> None:
-        self._switch_type("website")
-
-    @on(Button.Pressed, "#btn-save")
-    def _save(self, event: Button.Pressed) -> None:
-        self._do_save()
-
-    @on(Button.Pressed, "#btn-form-cancel")
-    def _cancel_btn(self, event: Button.Pressed) -> None:
-        self.dismiss(None)
-
-    def _do_save(self) -> None:
-        if not self.current_type:
-            self.notify("Please select a source type first.", severity="error")
-            return
-        try:
-            data: dict[str, str] = {}
-            for field_key, _ in SOURCE_FIELDS[self.current_type]:
-                try:
-                    inp = self.query_one(f"#field-{self.current_type}-{field_key}", Input)
-                    data[field_key] = inp.value.strip()
-                except Exception:
-                    data[field_key] = ""
-
-            if not data.get("author") or not data.get("title"):
-                self.notify("Author and Title are required.", severity="error")
-                return
-
-            source = Source(
-                id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
-                source_type=self.current_type,
-                author=data.get("author", ""),
-                title=data.get("title", ""),
-                year=data.get("year", ""),
-                publisher=data.get("publisher", ""),
-                city=data.get("city", ""),
-                journal=data.get("journal", ""),
-                volume=data.get("volume", ""),
-                issue=data.get("issue", ""),
-                pages=data.get("pages", ""),
-                book_title=data.get("book_title", ""),
-                editor=data.get("editor", ""),
-                url=data.get("url", ""),
-                access_date=data.get("access_date", ""),
-                site_name=data.get("site_name", ""),
-            )
-            self.dismiss(source)
-        except Exception as exc:
-            self.notify(f"Error saving source: {exc}", severity="error")
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-# ════════════════════════════════════════════════════════════════════════
-#  BibTeX Import
-# ════════════════════════════════════════════════════════════════════════
-
-
 def parse_bibtex(text: str) -> list[Source]:
     """Parse BibTeX entries into Source objects.
 
@@ -2528,335 +1007,1663 @@ def parse_bibtex(text: str) -> list[Source]:
     return sources
 
 
-class BibImportModal(ModalScreen[list[Source] | None]):
+# ════════════════════════════════════════════════════════════════════════
+#  Markdown Lexer
+# ════════════════════════════════════════════════════════════════════════
+
+
+class MarkdownInlineLexer(RegexLexer):
+    """Minimal Markdown lexer for inline highlighting."""
+
+    name = "MarkdownInline"
+    flags = re.MULTILINE
+    tokens = {
+        "root": [
+            (r"^(#{1,6})(\s+)(.+)$",
+             bygroups(Token.Comment, Token.Text, Token.Generic.Heading)),
+            (r"\*\*[^*]+\*\*", Token.Generic.Strong),
+            (r"(?<!\*)\*(?!\*)[^*]+?(?<!\*)\*(?!\*)", Token.Generic.Emph),
+            (r"`[^`]+`", Token.Literal.String),
+            (r"\^\[[^\]]*\]", Token.Comment.Special),
+            (r"\[[^\]]+\]\([^)]+\)", Token.Name.Tag),
+            (r"[^\n]", Token.Text),
+            (r"\n", Token.Text),
+        ],
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  SelectableList Widget
+# ════════════════════════════════════════════════════════════════════════
+
+
+class SelectableList:
+    """Navigable list widget. Items are (id, label) pairs."""
+
+    def __init__(self, on_select=None):
+        self.items = []
+        self.selected_index = 0
+        self.on_select = on_select
+        self._kb = KeyBindings()
+        sl = self
+
+        @self._kb.add("up")
+        def _up(event):
+            if sl.selected_index > 0:
+                sl.selected_index -= 1
+
+        @self._kb.add("down")
+        def _down(event):
+            if sl.selected_index < len(sl.items) - 1:
+                sl.selected_index += 1
+
+        @self._kb.add("enter")
+        def _enter(event):
+            if sl.items and sl.on_select:
+                sl.on_select(sl.items[sl.selected_index][0])
+
+        @self._kb.add("home")
+        def _home(event):
+            sl.selected_index = 0
+
+        @self._kb.add("end")
+        def _end(event):
+            if sl.items:
+                sl.selected_index = len(sl.items) - 1
+
+        self.control = FormattedTextControl(
+            self._get_text, focusable=True, key_bindings=self._kb,
+        )
+        self.window = Window(
+            content=self.control, style="class:select-list", wrap_lines=True,
+        )
+
+    def _get_text(self):
+        if not self.items:
+            return [("class:select-list.empty", "  (empty)\n")]
+        result = []
+        for i, (_, label) in enumerate(self.items):
+            s = "class:select-list.selected" if i == self.selected_index else ""
+            result.append((s, f"  {label}\n"))
+        return result
+
+    def set_items(self, items):
+        self.items = items
+        if self.selected_index >= len(items):
+            self.selected_index = max(0, len(items) - 1)
+
+    def __pt_container__(self):
+        return self.window
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Application State
+# ════════════════════════════════════════════════════════════════════════
+
+
+class AppState:
+    """Mutable application state shared across the UI."""
+
+    def __init__(self, storage):
+        self.storage = storage
+        self.projects = storage.list_projects()
+        self.current_project = None
+        self.screen = "projects"
+        self.notification = ""
+        self.notification_task = None
+        self.quit_pending = 0.0
+        self.mass_export_pending = 0.0
+        self.showing_exports = False
+        self.show_keybindings = False
+        self.editor_dirty = False
+        self.root_container = None
+        self.auto_save_task = None
+        self.export_paths = []
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Helpers
+# ════════════════════════════════════════════════════════════════════════
+
+
+def show_notification(state, message, duration=3.0):
+    """Show a notification in the status bar, auto-clearing after duration."""
+    state.notification = message
+    get_app().invalidate()
+    if state.notification_task:
+        state.notification_task.cancel()
+
+    async def _clear():
+        await asyncio.sleep(duration)
+        if state.notification == message:
+            state.notification = ""
+            get_app().invalidate()
+
+    state.notification_task = asyncio.ensure_future(_clear())
+
+
+async def show_dialog_as_float(state, dialog):
+    """Show a modal dialog as a float and await its result."""
+    float_ = Float(content=dialog, transparent=False)
+    state.root_container.floats.insert(0, float_)
+    app = get_app()
+    focused_before = app.layout.current_window
+    app.layout.focus(dialog)
+    result = await dialog.future
+    if float_ in state.root_container.floats:
+        state.root_container.floats.remove(float_)
+    try:
+        app.layout.focus(focused_before)
+    except ValueError:
+        pass
+    app.invalidate()
+    return result
+
+
+def _detect_printers():
+    """Return list of available printer names via lpstat."""
+    try:
+        result = subprocess.run(
+            ["lpstat", "-a"], capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        return [
+            line.split()[0]
+            for line in result.stdout.strip().splitlines()
+            if line.split()
+        ]
+    except Exception:
+        return []
+
+
+def _para_count(text):
+    """Count paragraphs in text (excluding YAML frontmatter)."""
+    body = re.sub(r"^---\n.*?\n---\n?", "", text, count=1, flags=re.DOTALL)
+    return sum(1 for p in re.split(r"\n\s*\n", body) if p.strip())
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Dialogs
+# ════════════════════════════════════════════════════════════════════════
+
+
+class InputDialog:
+    """Text input dialog (new project, rename)."""
+
+    def __init__(self, title="", label_text="", initial="", ok_text="OK"):
+        self.future = asyncio.Future()
+        self.text_area = TextArea(
+            text=initial, multiline=False, width=D(preferred=40),
+        )
+
+        def accept(_buf=None):
+            val = self.text_area.text.strip()
+            if not self.future.done():
+                self.future.set_result(val if val else None)
+
+        self.text_area.buffer.accept_handler = accept
+        ok_btn = Button(text=ok_text, handler=accept)
+        cancel_btn = Button(text="Cancel", handler=self.cancel)
+        self.dialog = Dialog(
+            title=title,
+            body=HSplit([Label(text=label_text), self.text_area]),
+            buttons=[ok_btn, cancel_btn],
+            modal=True,
+        )
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class ConfirmDialog:
+    """Yes/No confirmation dialog with y/n key bindings."""
+
+    def __init__(self, question="Are you sure?"):
+        self.future = asyncio.Future()
+        kb = KeyBindings()
+
+        @kb.add("y")
+        def _yes(event):
+            if not self.future.done():
+                self.future.set_result(True)
+
+        @kb.add("n")
+        def _no(event):
+            if not self.future.done():
+                self.future.set_result(False)
+
+        self._control = FormattedTextControl(
+            [("", f"\n  {question}\n\n  Press (y) Yes or (n) No\n")],
+            focusable=True,
+            key_bindings=kb,
+        )
+
+        def yes_handler():
+            if not self.future.done():
+                self.future.set_result(True)
+
+        def no_handler():
+            if not self.future.done():
+                self.future.set_result(False)
+
+        self.dialog = Dialog(
+            title="Confirm",
+            body=Window(content=self._control, height=5),
+            buttons=[
+                Button(text="Yes", handler=yes_handler),
+                Button(text="No", handler=no_handler),
+            ],
+            modal=True,
+            width=D(preferred=50),
+        )
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(False)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class ExportFormatDialog:
+    """Pick export format: PDF, DOCX, or Markdown."""
+
+    def __init__(self):
+        self.future = asyncio.Future()
+        self.list = SelectableList(on_select=self._select)
+        self.list.set_items([
+            ("pdf", "PDF (.pdf)"),
+            ("docx", "Word (.docx)"),
+            ("md", "Markdown (.md)"),
+        ])
+        self.dialog = Dialog(
+            title="Export as",
+            body=HSplit([self.list], padding=0),
+            buttons=[Button(text="Cancel", handler=self.cancel)],
+            modal=True,
+            width=D(preferred=40, max=50),
+        )
+
+    def _select(self, fmt):
+        if not self.future.done():
+            self.future.set_result(fmt)
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class PrinterPickerDialog:
+    """Pick a printer from available system printers."""
+
+    def __init__(self, printers, file_path):
+        self.future = asyncio.Future()
+        self.file_path = file_path
+        self.list = SelectableList(on_select=self._select)
+        self.list.set_items([(p, p) for p in printers])
+        self.dialog = Dialog(
+            title="Print to",
+            body=HSplit([self.list]),
+            buttons=[Button(text="Cancel", handler=self.cancel)],
+            modal=True,
+            width=D(preferred=50, max=60),
+        )
+
+    def _select(self, printer):
+        try:
+            subprocess.Popen([
+                "lp", "-d", printer, "-o", "sides=two-sided-long-edge",
+                str(self.file_path),
+            ])
+        except Exception:
+            pass
+        if not self.future.done():
+            self.future.set_result(printer)
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class CitePickerDialog:
+    """Fuzzy-search sources and pick one to insert as a footnote."""
+
+    def __init__(self, sources):
+        self.future = asyncio.Future()
+        self.all_sources = sources
+        self.filtered = list(sources)
+        self.search_buf = Buffer(multiline=False)
+        self.search_buf.on_text_changed += self._on_search_changed
+        search_kb = KeyBindings()
+
+        @search_kb.add("down")
+        def _down(event):
+            event.app.layout.focus(self.results.window)
+
+        @search_kb.add("enter")
+        def _enter(event):
+            if self.filtered:
+                idx = min(self.results.selected_index, len(self.filtered) - 1)
+                s = self.filtered[idx]
+                if not self.future.done():
+                    self.future.set_result(s.to_chicago_footnote())
+
+        self.search_control = BufferControl(
+            buffer=self.search_buf, key_bindings=search_kb,
+        )
+        self.search_window = Window(
+            content=self.search_control, height=1, style="class:input",
+        )
+        self.results = SelectableList(on_select=self._on_select)
+        self._update_results("")
+        self.dialog = Dialog(
+            title="Insert Citation",
+            body=HSplit([self.search_window, self.results], padding=0),
+            buttons=[Button(text="Cancel", handler=self.cancel)],
+            modal=True,
+            width=D(preferred=80, max=100),
+        )
+
+    def _on_search_changed(self, buf):
+        self._update_results(buf.text)
+
+    def _update_results(self, query):
+        self.filtered = fuzzy_filter(self.all_sources, query)
+        items = [(s.id, f"{s.author} ({s.year}) \u2014 {s.title}")
+                 for s in self.filtered]
+        self.results.set_items(items)
+        self.results.selected_index = 0
+
+    def _on_select(self, source_id):
+        for s in self.filtered:
+            if s.id == source_id:
+                if not self.future.done():
+                    self.future.set_result(s.to_chicago_footnote())
+                return
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class SourceFormDialog:
+    """Form for adding a new source with type selector and fields."""
+
+    def __init__(self):
+        self.future = asyncio.Future()
+        self.current_type = ""
+        self.field_inputs = {}
+        for stype in SOURCE_TYPES:
+            for field_key, label in SOURCE_FIELDS[stype]:
+                self.field_inputs[(stype, field_key)] = Buffer(multiline=False)
+
+        self._field_containers = {}
+        for stype in SOURCE_TYPES:
+            rows = []
+            for field_key, label in SOURCE_FIELDS[stype]:
+                buf = self.field_inputs[(stype, field_key)]
+                rows.append(Window(
+                    FormattedTextControl([("class:form-label", f" {label}: ")]),
+                    height=1, dont_extend_height=True,
+                ))
+                rows.append(Window(
+                    BufferControl(buffer=buf), height=1,
+                    style="class:input", dont_extend_height=True,
+                ))
+            self._field_containers[stype] = HSplit(rows)
+
+        type_kb = KeyBindings()
+        shortcuts = {"b": "book", "s": "book_section",
+                     "a": "article", "w": "website"}
+        for key, stype in shortcuts.items():
+            def _make_handler(st):
+                def handler(event):
+                    self._switch_type(st, event.app)
+                return handler
+            type_kb.add(key)(_make_handler(stype))
+
+        self.type_control = FormattedTextControl(
+            self._get_type_text, focusable=True, key_bindings=type_kb,
+        )
+        self.type_window = Window(
+            content=self.type_control, height=1, dont_extend_height=True,
+        )
+        self._body_container = DynamicContainer(self._get_fields_container)
+
+        def do_save():
+            self._do_save()
+
+        self.dialog = Dialog(
+            title="Add Source",
+            body=HSplit([
+                self.type_window,
+                Window(height=1, char=" "),
+                self._body_container,
+            ]),
+            buttons=[
+                Button(text="Save", handler=do_save),
+                Button(text="Cancel", handler=self.cancel),
+            ],
+            modal=True,
+            width=D(preferred=80, max=100),
+        )
+
+    def _get_type_text(self):
+        labels = {"book": "(b) Book", "book_section": "(s) Section",
+                  "article": "(a) Article", "website": "(w) Website"}
+        result = []
+        for stype, label in labels.items():
+            if stype == self.current_type:
+                result.append(("class:accent bold", f" [{label}] "))
+            else:
+                result.append(("", f" {label} "))
+        if not self.current_type:
+            result.append(("class:hint", "  \u2190 Choose a type"))
+        return result
+
+    def _get_fields_container(self):
+        if self.current_type and self.current_type in self._field_containers:
+            return self._field_containers[self.current_type]
+        return Window(FormattedTextControl(
+            [("class:hint", "  Select a source type above.")]), height=2)
+
+    def _switch_type(self, stype, app=None):
+        self.current_type = stype
+        if app:
+            first_key = SOURCE_FIELDS[stype][0][0]
+            buf = self.field_inputs[(stype, first_key)]
+            for w in app.layout.find_all_windows():
+                c = w.content
+                if isinstance(c, BufferControl) and c.buffer is buf:
+                    app.layout.focus(w)
+                    break
+
+    def _do_save(self):
+        if not self.current_type:
+            return
+        data = {}
+        for field_key, _ in SOURCE_FIELDS[self.current_type]:
+            buf = self.field_inputs.get((self.current_type, field_key))
+            data[field_key] = buf.text.strip() if buf else ""
+        if not data.get("author") or not data.get("title"):
+            return
+        source = Source(
+            id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+            source_type=self.current_type,
+            author=data.get("author", ""),
+            title=data.get("title", ""),
+            year=data.get("year", ""),
+            publisher=data.get("publisher", ""),
+            city=data.get("city", ""),
+            journal=data.get("journal", ""),
+            volume=data.get("volume", ""),
+            issue=data.get("issue", ""),
+            pages=data.get("pages", ""),
+            book_title=data.get("book_title", ""),
+            editor=data.get("editor", ""),
+            url=data.get("url", ""),
+            access_date=data.get("access_date", ""),
+            site_name=data.get("site_name", ""),
+        )
+        if not self.future.done():
+            self.future.set_result(source)
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class SourcesDialog:
+    """View / add / delete sources for a project."""
+
+    def __init__(self, state, project):
+        self.future = asyncio.Future()
+        self.state = state
+        self.project = project
+        self._delete_pending = 0.0
+        self.source_list = SelectableList()
+        self._refresh_list()
+
+        action_kb = KeyBindings()
+
+        @action_kb.add("a")
+        def _add(event):
+            async def _do():
+                dlg = SourceFormDialog()
+                source = await show_dialog_as_float(state, dlg)
+                if source:
+                    self.project.add_source(source)
+                    state.storage.save_project(self.project)
+                    self._refresh_list()
+                    show_notification(state, f"Added: {source.author}")
+                event.app.layout.focus(self.source_list.window)
+            asyncio.ensure_future(_do())
+
+        @action_kb.add("i")
+        def _import(event):
+            async def _do():
+                other = [p for p in state.storage.list_projects()
+                         if p.id != self.project.id]
+                if not other:
+                    show_notification(state, "No other manuscripts to import from.")
+                    return
+                dlg = ImportSourcesDialog(other)
+                sources = await show_dialog_as_float(state, dlg)
+                if sources:
+                    existing = self.project.get_sources()
+                    existing_keys = {(s.author, s.title, s.year) for s in existing}
+                    added = 0
+                    for s in sources:
+                        if (s.author, s.title, s.year) not in existing_keys:
+                            s.id = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + f"_{added}"
+                            self.project.add_source(s)
+                            existing_keys.add((s.author, s.title, s.year))
+                            added += 1
+                    state.storage.save_project(self.project)
+                    self._refresh_list()
+                    skipped = len(sources) - added
+                    msg = f"Imported {added} source(s)."
+                    if skipped:
+                        msg += f" {skipped} duplicate(s) skipped."
+                    show_notification(state, msg)
+                event.app.layout.focus(self.source_list.window)
+            asyncio.ensure_future(_do())
+
+        @action_kb.add("d")
+        def _delete(event):
+            sources = self.project.get_sources()
+            idx = self.source_list.selected_index
+            if idx >= len(sources):
+                return
+            now = time.monotonic()
+            if now - self._delete_pending < 2.0:
+                self._delete_pending = 0.0
+                s = sources[idx]
+                self.project.remove_source(s.id)
+                self.state.storage.save_project(self.project)
+                self._refresh_list()
+                show_notification(self.state, "Source deleted.")
+            else:
+                self._delete_pending = now
+                show_notification(self.state, "Press d again to confirm delete.", duration=2.0)
+
+        self.source_list.control.key_bindings = KeyBindings()
+        for b in self.source_list._kb.bindings:
+            self.source_list.control.key_bindings.bindings.append(b)
+        for b in action_kb.bindings:
+            self.source_list.control.key_bindings.bindings.append(b)
+
+        def close():
+            if not self.future.done():
+                self.future.set_result(None)
+
+        self.dialog = Dialog(
+            title=f"Sources: {project.name}",
+            body=HSplit([self.source_list]),
+            buttons=[
+                Button(text="(a) Add", handler=lambda: _add(None)),
+                Button(text="(i) Import", handler=lambda: _import(None)),
+                Button(text="Close", handler=close),
+            ],
+            modal=True,
+            width=D(preferred=80, max=100),
+        )
+
+    def _refresh_list(self):
+        sources = self.project.get_sources()
+        if not sources:
+            self.source_list.set_items([
+                ("__empty__", "No sources yet \u2014 press a to add one.")])
+        else:
+            self.source_list.set_items([
+                (s.id, f"{s.author} ({s.year}) \u2014 {s.title}")
+                for s in sources
+            ])
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class BibImportDialog:
     """Modal to import a .bib file."""
 
-    DEFAULT_CSS = """
-    BibImportModal {
-        align: center middle;
-    }
-    #bib-import-box {
-        width: 70%;
-        max-width: 70;
-        height: auto;
-        max-height: 10;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    """
+    def __init__(self):
+        self.future = asyncio.Future()
+        self.text_area = TextArea(
+            text="", multiline=False, width=D(preferred=60),
+        )
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+        def do_import(_buf=None):
+            path_str = self.text_area.text.strip()
+            if not path_str:
+                return
+            p = Path(path_str).expanduser()
+            if not p.exists():
+                return
+            try:
+                text = p.read_text(encoding="utf-8")
+            except Exception:
+                return
+            sources = parse_bibtex(text)
+            if sources and not self.future.done():
+                self.future.set_result(sources)
 
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="bib-import-box")
-        box.border_title = "Import .bib File"
-        with box:
-            yield Input(placeholder="Path to .bib file…", id="bib-path-input")
-            with Horizontal():
-                yield Button("Import", id="btn-bib-import")
-                yield Button("Cancel", id="btn-bib-cancel")
+        self.text_area.buffer.accept_handler = do_import
+        self.dialog = Dialog(
+            title="Import .bib File",
+            body=HSplit([
+                Label(text="Path to .bib file:"),
+                self.text_area,
+            ]),
+            buttons=[
+                Button(text="Import", handler=do_import),
+                Button(text="Cancel", handler=self.cancel),
+            ],
+            modal=True,
+        )
 
-    def on_mount(self) -> None:
-        self.query_one("#bib-path-input", Input).focus()
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
 
-    @on(Button.Pressed, "#btn-bib-import")
-    def _import(self, event: Button.Pressed) -> None:
-        self._do_import()
-
-    @on(Button.Pressed, "#btn-bib-cancel")
-    def _cancel_btn(self, event: Button.Pressed) -> None:
-        self.dismiss(None)
-
-    @on(Input.Submitted, "#bib-path-input")
-    def _submit(self, event: Input.Submitted) -> None:
-        self._do_import()
-
-    def _do_import(self) -> None:
-        path_str = self.query_one("#bib-path-input", Input).value.strip()
-        if not path_str:
-            self.notify("Please enter a file path.", severity="error")
-            return
-        p = Path(path_str).expanduser()
-        if not p.exists():
-            self.notify(f"File not found: {p}", severity="error")
-            return
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception as exc:
-            self.notify(f"Could not read file: {exc}", severity="error")
-            return
-        sources = parse_bibtex(text)
-        if not sources:
-            self.notify("No entries found in .bib file.", severity="warning")
-            return
-        self.dismiss(sources)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
+    def __pt_container__(self):
+        return self.dialog
 
 
-# ── Import sources from another project ───────────────────────────────
+class ImportSourcesDialog:
+    """Two-phase: pick a project, then pick sources to import."""
 
-
-class ImportSourcesModal(ModalScreen[list[Source] | None]):
-    """Two-phase modal: pick a project, then pick sources to import."""
-
-    DEFAULT_CSS = """
-    ImportSourcesModal {
-        align: center middle;
-    }
-    #import-box {
-        width: 80%;
-        max-width: 90;
-        height: 70%;
-        border: solid #666;
-        background: $surface;
-        padding: 0 2;
-        border-title-color: #e0e0e0;
-    }
-    #import-list {
-        height: 1fr;
-    }
-    .import-buttons {
-        height: auto;
-        dock: bottom;
-    }
-    .import-buttons Button {
-        margin-right: 1;
-    }
-    """
-
-    BINDINGS = [
-        Binding("a", "import_all", "Import All", priority=True),
-        Binding("escape", "go_back", "Back", show=False),
-    ]
-
-    def __init__(self, projects: list[Project]) -> None:
-        super().__init__()
+    def __init__(self, projects):
+        self.future = asyncio.Future()
         self._projects = projects
-        self._phase = "projects"  # "projects" or "sources"
-        self._selected_project: Project | None = None
-        self._sources: list[Source] = []
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="import-box")
-        box.border_title = "Select a manuscript"
-        with box:
-            yield OptionList(id="import-list")
-            with Horizontal(classes="import-buttons"):
-                yield Button("(a) Import All", id="btn-import-all")
-                yield Button("(Esc) Back", id="btn-import-back")
-
-    def on_mount(self) -> None:
-        self._show_projects()
-        self.query_one("#btn-import-all", Button).styles.display = "none"
-
-    def _show_projects(self) -> None:
         self._phase = "projects"
         self._selected_project = None
         self._sources = []
-        self.query_one("#import-box").border_title = "Select a manuscript"
-        self.query_one("#btn-import-all", Button).styles.display = "none"
-        ol: OptionList = self.query_one("#import-list", OptionList)
-        ol.clear_options()
-        for p in self._projects:
-            src_count = len(p.get_sources())
-            ol.add_option(Option(f"{p.name}  ({src_count} sources)", id=p.id))
-        ol.focus()
+        self.list = SelectableList(on_select=self._on_select)
+        self._show_projects()
 
-    def _show_sources(self, project: Project) -> None:
+        action_kb = KeyBindings()
+
+        @action_kb.add("a")
+        def _import_all(event):
+            if self._phase == "sources" and self._sources:
+                if not self.future.done():
+                    self.future.set_result(list(self._sources))
+
+        self.list.control.key_bindings = KeyBindings()
+        for b in self.list._kb.bindings:
+            self.list.control.key_bindings.bindings.append(b)
+        for b in action_kb.bindings:
+            self.list.control.key_bindings.bindings.append(b)
+
+        def import_all_btn():
+            if self._phase == "sources" and self._sources:
+                if not self.future.done():
+                    self.future.set_result(list(self._sources))
+
+        self.dialog = Dialog(
+            title="Select a manuscript",
+            body=HSplit([self.list]),
+            buttons=[
+                Button(text="(a) Import All", handler=import_all_btn),
+                Button(text="Back", handler=self._go_back),
+            ],
+            modal=True,
+            width=D(preferred=70, max=90),
+        )
+
+    def _show_projects(self):
+        self._phase = "projects"
+        self._sources = []
+        self.list.set_items([
+            (p.id, f"{p.name}  ({len(p.get_sources())} sources)")
+            for p in self._projects
+        ])
+        self.list.selected_index = 0
+
+    def _show_sources(self, project):
         self._phase = "sources"
         self._selected_project = project
         self._sources = project.get_sources()
-        self.query_one("#import-box").border_title = f"{project.name}"
-        self.query_one("#btn-import-all", Button).styles.display = "block"
-        ol: OptionList = self.query_one("#import-list", OptionList)
-        ol.clear_options()
         if not self._sources:
-            ol.add_option(Option("  No sources in this manuscript.", id="__empty__"))
+            self.list.set_items([("__empty__", "No sources in this manuscript.")])
         else:
-            for s in self._sources:
-                ol.add_option(
-                    Option(f"{s.author} ({s.year}) — {s.title}", id=s.id)
-                )
-        ol.focus()
+            self.list.set_items([
+                (s.id, f"{s.author} ({s.year}) \u2014 {s.title}")
+                for s in self._sources
+            ])
+        self.list.selected_index = 0
 
-    @on(OptionList.OptionSelected, "#import-list")
-    def _select(self, event: OptionList.OptionSelected) -> None:
-        if event.option_id == "__empty__":
+    def _on_select(self, item_id):
+        if item_id == "__empty__":
             return
         if self._phase == "projects":
             for p in self._projects:
-                if p.id == event.option_id:
+                if p.id == item_id:
                     self._show_sources(p)
                     return
         elif self._phase == "sources":
             for s in self._sources:
-                if s.id == event.option_id:
-                    self.dismiss([s])
+                if s.id == item_id:
+                    if not self.future.done():
+                        self.future.set_result([s])
                     return
 
-    @on(Button.Pressed, "#btn-import-all")
-    def _import_all(self, event: Button.Pressed) -> None:
-        self.action_import_all()
-
-    def action_import_all(self) -> None:
-        if self._phase == "sources" and self._sources:
-            self.dismiss(list(self._sources))
-
-    @on(Button.Pressed, "#btn-import-back")
-    def _back(self, event: Button.Pressed) -> None:
-        self.action_go_back()
-
-    def action_go_back(self) -> None:
+    def _go_back(self):
         if self._phase == "sources":
             self._show_projects()
         else:
-            self.dismiss(None)
+            self.cancel()
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
 
 
-# ════════════════════════════════════════════════════════════════════════
-#  Command palette
-# ════════════════════════════════════════════════════════════════════════
+class CommandPaletteDialog:
+    """Command palette with fuzzy search."""
 
+    def __init__(self, commands):
+        self.future = asyncio.Future()
+        self.all_commands = commands
+        self.filtered = list(commands)
+        self.search_buf = Buffer(multiline=False)
+        self.search_buf.on_text_changed += self._on_search_changed
+        search_kb = KeyBindings()
 
-class ManuscriptsCommands(Provider):
-    """Expose actions in the command palette for both screens."""
+        @search_kb.add("down")
+        def _down(event):
+            event.app.layout.focus(self.results.window)
 
-    def _get_commands(self, include_hidden: bool = False):
-        """Return commands sorted alphabetically.
+        @search_kb.add("enter")
+        def _enter(event):
+            if self.filtered:
+                idx = min(self.results.selected_index, len(self.filtered) - 1)
+                if not self.future.done():
+                    self.future.set_result(self.filtered[idx][2])
 
-        ``include_hidden`` adds commands that should only appear via
-        search (not in the initial discover list).
-        """
-        screen = self.screen
-        commands: list[tuple[str, str, object]] = []
+        self.search_control = BufferControl(
+            buffer=self.search_buf, key_bindings=search_kb,
+        )
+        self.search_window = Window(
+            content=self.search_control, height=1, style="class:input",
+        )
+        self.results = SelectableList(on_select=self._on_select)
+        self._update_results("")
+        self.dialog = Dialog(
+            title="Command Palette",
+            body=HSplit([self.search_window, self.results], padding=0),
+            buttons=[Button(text="Cancel", handler=self.cancel)],
+            modal=True,
+            width=D(preferred=60, max=80),
+        )
 
-        if isinstance(screen, EditorScreen):
-            commands = [
-                ("Bibliography", "Insert bibliography from all sources", screen.action_bibliography),
-                ("Export", "Export document", screen.action_export_pdf),
-                ("Insert blank footnote (Ctrl+N)", "Insert footnote", screen.action_footnote),
-                ("Insert frontmatter", "Add YAML frontmatter properties", screen.action_insert_frontmatter),
-                ("Insert reference (Ctrl+R)", "Insert a reference", screen.action_cite),
-                ("Keybindings (Ctrl+H)", "Show keybindings panel", screen.action_toggle_help),
-                ("Return to manuscripts (Ctrl+M)", "Save and return to manuscripts", screen.action_close_project),
-                ("Save (Ctrl+S)", "Save document", screen.action_save),
-                ("Sources (Ctrl+O)", "Manage sources", screen.action_sources),
-            ]
-            if include_hidden:
-                commands.append(
-                    ("Import .bib file", "Import sources from a BibTeX file", screen.action_import_bib),
-                )
-        elif isinstance(screen, ProjectsScreen):
-            commands = [
-                ("Exports (e)", "Toggle exports view", screen.action_toggle_exports),
-                ("New manuscript (n)", "Create a new manuscript", screen.action_new_project),
-                ("Quit (q)", "Quit the application", screen.action_quit),
-            ]
+    def _on_search_changed(self, buf):
+        self._update_results(buf.text)
 
-        commands.sort(key=lambda c: c[0].lower())
-        return commands
-
-    async def discover(self) -> Hits:
-        for name, help_text, callback in self._get_commands(include_hidden=False):
-            yield DiscoveryHit(name, callback, help=help_text)
-
-    async def search(self, query: str) -> Hits:
-        matcher = self.matcher(query)
-        for name, help_text, callback in self._get_commands(include_hidden=True):
-            score = matcher.match(name)
-            if score > 0:
-                yield Hit(score, matcher.highlight(name), callback, help=help_text)
-
-
-# ════════════════════════════════════════════════════════════════════════
-#  App
-# ════════════════════════════════════════════════════════════════════════
-
-
-class ManuscriptsApp(App):
-    """Manuscripts — a writing appliance for students."""
-
-    COMMANDS = App.COMMANDS | {ManuscriptsCommands}
-    # Override App.BINDINGS so ctrl+q and the command palette don't leak
-    # into the keybindings panel.  EditorScreen has its own ctrl+p binding.
-    BINDINGS = [
-        Binding("ctrl+p", "command_palette", "Command Palette", show=False, system=True),
-        Binding("ctrl+q", "quit", "Quit", show=False, system=True),
-    ]
-    TITLE = "Manuscripts"
-    CSS = """
-    Screen {
-        background: #2a2a2a;
-    }
-    SearchIcon {
-        display: none;
-    }
-    Button {
-        background: #555;
-        color: #e0e0e0;
-        border: none;
-        height: auto;
-        min-width: 0;
-        margin: 0 1;
-    }
-    Button:hover {
-        background: #666;
-    }
-    Button:focus {
-        background: #777;
-    }
-    Button.-error {
-        background: #8b3a3a;
-    }
-    #projects-title {
-        color: #e0e0e0;
-        padding: 0 2;
-    }
-    #project-list {
-        margin: 1 2;
-        height: 1fr;
-    }
-    #editor {
-        height: 1fr;
-        border: none;
-        &:focus {
-            border: none;
-        }
-    }
-    #editor-status {
-        dock: bottom;
-        height: 1;
-        background: #333333;
-        color: #8a8a8a;
-        padding: 0 2;
-    }
-    """
-
-    def __init__(self, data_dir: Path) -> None:
-        super().__init__()
-        self.storage = Storage(data_dir)
-        self.projects: list[Project] = []
-        self._quit_pending = 0.0
-
-    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
-        """Suppress default system commands; ManuscriptsCommands handles everything."""
-        return []
-
-    def action_quit(self) -> None:
-        import time
-        now = time.monotonic()
-        if now - self._quit_pending < 2.0:
-            self.exit()
+    def _update_results(self, query):
+        if not query:
+            self.filtered = list(self.all_commands)
         else:
-            self._quit_pending = now
-            self.notify("Press again to quit.")
+            q = query.lower()
+            scored = []
+            for cmd in self.all_commands:
+                name = cmd[0].lower()
+                if q in name:
+                    scored.append((100.0, cmd))
+                else:
+                    ratio = SequenceMatcher(None, q, name).ratio() * 100
+                    if ratio > 30:
+                        scored.append((ratio, cmd))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            self.filtered = [c for _, c in scored]
+        self.results.set_items([
+            (str(i), cmd[0]) for i, cmd in enumerate(self.filtered)
+        ])
+        self.results.selected_index = 0
 
-    def on_mount(self) -> None:
-        self.push_screen(ProjectsScreen())
+    def _on_select(self, item_id):
+        idx = int(item_id)
+        if idx < len(self.filtered):
+            if not self.future.done():
+                self.future.set_result(self.filtered[idx][2])
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Application
+# ════════════════════════════════════════════════════════════════════════
+
+
+_FRONTMATTER_PROPS = ["title", "author", "instructor", "date", "spacing", "style"]
+
+
+def create_app(storage):
+    """Build and return the prompt_toolkit Application."""
+    state = AppState(storage)
+
+    # ── Projects screen widgets ──────────────────────────────────────
+
+    project_search = TextArea(
+        multiline=False, prompt=" Search: ", height=1,
+        style="class:input",
+    )
+    project_list = SelectableList()
+    export_list = SelectableList()
+    hints_control = FormattedTextControl(
+        lambda: [("class:hint", " (n) New  (r) Rename  (d) Delete  (e) Exports")])
+    hints_window = Window(content=hints_control, height=1)
+
+    def refresh_projects(query=""):
+        state.projects = state.storage.list_projects()
+        filtered = fuzzy_filter_projects(state.projects, query)
+        if not state.projects:
+            project_list.set_items([
+                ("__empty__", "No manuscripts yet \u2014 press n to create one.")])
+        elif not filtered:
+            project_list.set_items([("__empty__", "No matching manuscripts.")])
+        else:
+            items = []
+            for p in filtered:
+                try:
+                    mod = datetime.fromisoformat(p.modified).strftime("%b %d, %Y")
+                except (ValueError, TypeError):
+                    mod = ""
+                items.append((p.id, f"{p.name}  ({mod})"))
+            project_list.set_items(items)
+
+    def refresh_exports():
+        export_dir = state.storage.exports_dir
+        files = []
+        for ext in ("*.pdf", "*.docx", "*.md"):
+            files.extend(export_dir.glob(ext))
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        state.export_paths = files
+        if not files:
+            export_list.set_items([("__empty__", "No exports yet.")])
+        else:
+            items = []
+            for f in files:
+                try:
+                    mod = datetime.fromtimestamp(f.stat().st_mtime).strftime(
+                        "%b %d, %Y %H:%M")
+                except (ValueError, OSError):
+                    mod = ""
+                size_kb = f.stat().st_size // 1024
+                items.append((str(f), f"{f.name}  ({mod}, {size_kb} KB)"))
+            export_list.set_items(items)
+
+    project_search.buffer.on_text_changed += lambda buf: refresh_projects(buf.text)
+    refresh_projects()
+
+    def open_project(pid):
+        if pid == "__empty__":
+            return
+        project = state.storage.load_project(pid)
+        if project:
+            state.current_project = project
+            state.editor_dirty = False
+            editor_area.text = project.content
+            state.screen = "editor"
+            get_app().layout.focus(editor_area.window)
+            if state.auto_save_task:
+                state.auto_save_task.cancel()
+            state.auto_save_task = asyncio.ensure_future(auto_save_loop())
+            get_app().invalidate()
+
+    project_list.on_select = open_project
+
+    def open_export(path_str):
+        if path_str == "__empty__":
+            return
+        path = Path(path_str)
+        if path.suffix.lower() == ".pdf":
+            printers = _detect_printers()
+            if printers:
+                async def _show():
+                    dlg = PrinterPickerDialog(printers, path)
+                    result = await show_dialog_as_float(state, dlg)
+                    if result:
+                        show_notification(state, f"Sent to {result}.")
+                asyncio.ensure_future(_show())
+                return
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception:
+            pass
+
+    export_list.on_select = open_export
+
+    projects_view = HSplit([
+        Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
+               height=1, dont_extend_height=True),
+        project_search,
+        project_list,
+        hints_window,
+    ])
+
+    exports_view = HSplit([
+        Window(FormattedTextControl([("class:title", " Exports")]),
+               height=1, dont_extend_height=True),
+        export_list,
+    ])
+
+    def get_projects_screen():
+        if state.showing_exports:
+            return exports_view
+        return projects_view
+
+    projects_screen = DynamicContainer(get_projects_screen)
+
+    # ── Editor screen widgets ────────────────────────────────────────
+
+    editor_area = TextArea(
+        text="",
+        multiline=True,
+        wrap_lines=True,
+        scrollbar=False,
+        lexer=PygmentsLexer(MarkdownInlineLexer),
+        style="class:editor",
+        focus_on_click=True,
+    )
+    editor_area.buffer.on_text_changed += lambda buf: setattr(state, 'editor_dirty', True)
+
+    def get_status_text():
+        if state.notification:
+            return [("class:status", f" {state.notification}")]
+        if state.current_project:
+            paras = _para_count(editor_area.text)
+            return [("class:status",
+                     f" {state.current_project.name}  {paras} \u00b6")]
+        return [("class:status", "")]
+
+    status_bar = Window(
+        FormattedTextControl(get_status_text), height=1, style="class:status",
+    )
+
+    def get_keybindings_text():
+        sections = [
+            [("Esc", "Manuscripts"), ("^O", "Sources"), ("^P", "Commands"),
+             ("^Q", "Quit"), ("^S", "Save")],
+            [("^B", "Bold"), ("^I", "Italic"), ("^N", "Footnote"),
+             ("^R", "Cite"), ("^Z", "Undo"), ("^Y", "Redo")],
+            [("^Up", "Top"), ("^Down", "Bottom")],
+            [("^H", "This panel")],
+        ]
+        result = []
+        for i, section in enumerate(sections):
+            if i > 0:
+                result.append(("", "\n"))
+            for key, desc in section:
+                result.append(("class:accent bold", f"  {key:>6}"))
+                result.append(("", f"  {desc}\n"))
+        return result
+
+    keybindings_panel = Window(
+        FormattedTextControl(get_keybindings_text),
+        width=26, style="class:keybindings-panel",
+    )
+
+    def get_editor_body():
+        parts = [editor_area]
+        if state.show_keybindings:
+            parts.append(keybindings_panel)
+        return VSplit(parts)
+
+    editor_screen = HSplit([
+        DynamicContainer(get_editor_body),
+        status_bar,
+    ])
+
+    # ── Screen switcher ──────────────────────────────────────────────
+
+    def get_current_screen():
+        if state.screen == "editor":
+            return editor_screen
+        return projects_screen
+
+    root = FloatContainer(
+        content=DynamicContainer(get_current_screen),
+        floats=[],
+    )
+    state.root_container = root
+
+    # ── Auto-save ────────────────────────────────────────────────────
+
+    async def auto_save_loop():
+        while state.screen == "editor":
+            await asyncio.sleep(30)
+            if state.editor_dirty and state.current_project:
+                state.current_project.content = editor_area.text
+                state.editor_dirty = False
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, state.storage.save_project, state.current_project)
+
+    # ── Export pipeline ──────────────────────────────────────────────
+
+    async def run_export(export_format):
+        project = state.current_project
+        if not project:
+            return
+        export_dir = state.storage.exports_dir
+        safe_name = (re.sub(r'[^\w\s-]', '', project.name)
+                     .strip().replace(' ', '_')[:50] or "export")
+        loop = asyncio.get_running_loop()
+
+        if export_format == "md":
+            out = export_dir / f"{safe_name}.md"
+            await loop.run_in_executor(
+                None, lambda: out.write_text(project.content))
+            show_notification(state, f"Exported: {out.name}")
+            return
+
+        yaml = parse_yaml_frontmatter(project.content)
+        pandoc = detect_pandoc()
+        if not pandoc:
+            show_notification(state, "Pandoc not found. Install pandoc for export.")
+            return
+
+        if export_format == "pdf":
+            libreoffice = detect_libreoffice()
+            if not libreoffice:
+                show_notification(state, "LibreOffice not found for PDF export.")
+                return
+        else:
+            libreoffice = None
+
+        ref_doc = resolve_reference_doc(yaml)
+        if not ref_doc:
+            show_notification(state, "No reference .docx found in refs/ directory.")
+            return
+
+        md_path = export_dir / f"{project.id}.md"
+        lua_path = export_dir / f"{project.id}_filter.lua"
+        docx_path = export_dir / f"{safe_name}.docx"
+        pdf_path = export_dir / f"{safe_name}.pdf"
+
+        try:
+            await loop.run_in_executor(None, lambda: md_path.write_text(project.content))
+            lua_code = _generate_lua_filter(yaml)
+            await loop.run_in_executor(None, lambda: lua_path.write_text(lua_code))
+
+            pandoc_args = [
+                pandoc, str(md_path), "--standalone",
+                f"--reference-doc={ref_doc}", f"--lua-filter={lua_path}",
+            ]
+            if "bibliography" in yaml:
+                pandoc_args.append("--citeproc")
+            pandoc_args.extend(["-o", str(docx_path)])
+
+            steps = "1/3" if export_format == "pdf" else "1/2"
+            show_notification(state, f"Exporting\u2026 ({steps}) Running pandoc", duration=60)
+            result = await loop.run_in_executor(
+                None, lambda: subprocess.run(
+                    pandoc_args, capture_output=True, text=True, timeout=60))
+            if result.returncode != 0:
+                show_notification(state, "Export failed: pandoc error")
+                return
+
+            steps = "2/3" if export_format == "pdf" else "2/2"
+            show_notification(state, f"Exporting\u2026 ({steps}) Post-processing", duration=60)
+            try:
+                await loop.run_in_executor(
+                    None, lambda: _postprocess_docx(str(docx_path), yaml))
+            except Exception:
+                pass
+
+            if export_format == "docx":
+                show_notification(state, f"Exported: {docx_path.name}")
+                return
+
+            show_notification(state, "Exporting\u2026 (3/3) Converting to PDF", duration=60)
+            lo_args = [
+                libreoffice, "--headless", "--convert-to", "pdf",
+                "--outdir", str(export_dir), str(docx_path),
+            ]
+            result = await loop.run_in_executor(
+                None, lambda: subprocess.run(
+                    lo_args, capture_output=True, text=True, timeout=60))
+            if result.returncode != 0:
+                show_notification(state, "Export failed: LibreOffice error")
+                return
+            show_notification(state, f"Exported: {pdf_path.name}")
+
+        except subprocess.TimeoutExpired:
+            show_notification(state, "Export failed: timed out")
+        except Exception as exc:
+            show_notification(state, f"Export failed: {str(exc)[:80]}")
+        finally:
+            cleanup = [md_path, lua_path]
+            if export_format == "pdf":
+                cleanup.append(docx_path)
+            for p in cleanup:
+                try:
+                    if p.exists():
+                        p.unlink()
+                except OSError:
+                    pass
+
+    # ── Editor actions ───────────────────────────────────────────────
+
+    def do_save(notify=True):
+        if state.current_project:
+            state.current_project.content = editor_area.text
+            state.storage.save_project(state.current_project)
+            state.editor_dirty = False
+            if notify:
+                show_notification(state, "Saved.")
+
+    def return_to_projects():
+        do_save(notify=False)
+        if state.auto_save_task:
+            state.auto_save_task.cancel()
+            state.auto_save_task = None
+        state.screen = "projects"
+        state.current_project = None
+        state.showing_exports = False
+        refresh_projects()
+        get_app().layout.focus(project_search.window)
+        get_app().invalidate()
+
+    def do_bold():
+        buf = editor_area.buffer
+        if buf.selection_state:
+            start = buf.selection_state.original_cursor_position
+            end = buf.cursor_position
+            if start > end:
+                start, end = end, start
+            selected = buf.text[start:end]
+            new_text = buf.text[:start] + f"**{selected}**" + buf.text[end:]
+            buf.set_document(Document(new_text, start + len(selected) + 4), bypass_readonly=True)
+        else:
+            pos = buf.cursor_position
+            new_text = buf.text[:pos] + "****" + buf.text[pos:]
+            buf.set_document(Document(new_text, pos + 2), bypass_readonly=True)
+
+    def do_italic():
+        buf = editor_area.buffer
+        if buf.selection_state:
+            start = buf.selection_state.original_cursor_position
+            end = buf.cursor_position
+            if start > end:
+                start, end = end, start
+            selected = buf.text[start:end]
+            new_text = buf.text[:start] + f"*{selected}*" + buf.text[end:]
+            buf.set_document(Document(new_text, start + len(selected) + 2), bypass_readonly=True)
+        else:
+            pos = buf.cursor_position
+            new_text = buf.text[:pos] + "**" + buf.text[pos:]
+            buf.set_document(Document(new_text, pos + 1), bypass_readonly=True)
+
+    def do_footnote():
+        buf = editor_area.buffer
+        pos = buf.cursor_position
+        new_text = buf.text[:pos] + "^[]" + buf.text[pos:]
+        buf.set_document(Document(new_text, pos + 2), bypass_readonly=True)
+
+    def do_bibliography():
+        if not state.current_project:
+            return
+        sources = state.current_project.get_sources()
+        if not sources:
+            show_notification(state, "No sources. Add sources first.")
+            return
+        sorted_sources = sorted(
+            sources, key=lambda s: s.author.split()[-1] if s.author else "")
+        lines = ["## Bibliography", ""]
+        for s in sorted_sources:
+            lines.append(s.to_chicago_bibliography())
+            lines.append("")
+        editor_area.buffer.insert_text("\n".join(lines))
+        show_notification(state, "Bibliography inserted.")
+
+    def do_insert_frontmatter():
+        text = editor_area.text
+        m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
+        if m:
+            existing = set()
+            for line in m.group(1).split("\n"):
+                idx = line.find(":")
+                if idx > 0:
+                    existing.add(line[:idx].strip())
+            missing = [p for p in _FRONTMATTER_PROPS if p not in existing]
+            if not missing:
+                show_notification(state, "All frontmatter properties already present.")
+                return
+            new_lines = "\n".join(f"{p}: " for p in missing)
+            end_pos = m.end(1)
+            new_text = text[:end_pos] + "\n" + new_lines + text[end_pos:]
+        else:
+            block = "\n".join(f"{p}: " for p in _FRONTMATTER_PROPS)
+            new_text = f"---\n{block}\n---\n" + text
+        editor_area.buffer.set_document(Document(new_text, 0), bypass_readonly=True)
+        show_notification(state, "Frontmatter inserted.")
+
+    def do_mass_export_md():
+        if not state.projects:
+            show_notification(state, "No manuscripts to export.")
+            return
+
+        async def _do():
+            loop = asyncio.get_running_loop()
+            count = 0
+            for project in state.projects:
+                full = await loop.run_in_executor(
+                    None, state.storage.load_project, project.id)
+                if not full or not full.content.strip():
+                    continue
+                safe = (re.sub(r'[^\w\s-]', '', full.name)
+                        .strip().replace(' ', '_')[:50] or "export")
+                out = state.storage.exports_dir / f"{safe}.md"
+                await loop.run_in_executor(
+                    None, lambda p=out, c=full.content: p.write_text(c))
+                count += 1
+            show_notification(
+                state, f"Exported {count} manuscript{'s' if count != 1 else ''} as Markdown.")
+
+        asyncio.ensure_future(_do())
+
+    # ── Get commands for palette ─────────────────────────────────────
+
+    def get_commands():
+        if state.screen == "editor":
+            return [
+                ("Bibliography", "Insert bibliography", do_bibliography),
+                ("Export", "Export document", lambda: asyncio.ensure_future(
+                    show_dialog_as_float(state, ExportFormatDialog()).then(
+                        lambda fmt: run_export(fmt) if fmt else None))),
+                ("Insert blank footnote (^N)", "Insert footnote", do_footnote),
+                ("Insert frontmatter", "Add YAML frontmatter", do_insert_frontmatter),
+                ("Insert reference (^R)", "Insert a citation", None),
+                ("Keybindings (^H)", "Toggle keybindings panel",
+                 lambda: toggle_keybindings()),
+                ("Return to manuscripts (Esc)", "Save and go back", return_to_projects),
+                ("Save (^S)", "Save document", lambda: do_save()),
+                ("Sources (^O)", "Manage sources", None),
+                ("Import .bib file", "Import BibTeX", None),
+            ]
+        else:
+            return [
+                ("Exports (e)", "Toggle exports view", lambda: toggle_exports()),
+                ("New manuscript (n)", "Create a new manuscript", None),
+                ("Quit (q)", "Quit the application", None),
+            ]
+
+    def toggle_keybindings():
+        state.show_keybindings = not state.show_keybindings
+        get_app().invalidate()
+
+    def toggle_exports():
+        state.showing_exports = not state.showing_exports
+        if state.showing_exports:
+            refresh_exports()
+            get_app().layout.focus(export_list.window)
+        else:
+            get_app().layout.focus(project_list.window)
+        get_app().invalidate()
+
+    # ── Key bindings ─────────────────────────────────────────────────
+
+    kb = KeyBindings()
+
+    is_projects = Condition(lambda: state.screen == "projects")
+    is_editor = Condition(lambda: state.screen == "editor")
+    no_float = Condition(lambda: len(state.root_container.floats) == 0)
+
+    # -- Global --
+    @kb.add("escape")
+    def _(event):
+        if state.root_container.floats:
+            dialog = state.root_container.floats[0].content
+            if hasattr(dialog, 'cancel'):
+                dialog.cancel()
+            elif hasattr(dialog, 'future') and not dialog.future.done():
+                dialog.future.set_result(None)
+        elif state.screen == "editor":
+            return_to_projects()
+
+    @kb.add("c-q")
+    def _(event):
+        if state.root_container.floats:
+            return
+        now = time.monotonic()
+        if now - state.quit_pending < 2.0:
+            event.app.exit()
+        else:
+            state.quit_pending = now
+            show_notification(state, "Press Ctrl+Q again to quit.", duration=2.0)
+
+    # -- Projects screen --
+    @kb.add("n", filter=is_projects & no_float)
+    def _(event):
+        if state.showing_exports:
+            return
+
+        async def _do():
+            dlg = InputDialog(title="New Manuscript", label_text="Name:",
+                              ok_text="Create")
+            name = await show_dialog_as_float(state, dlg)
+            if name:
+                project = state.storage.create_project(name)
+                open_project(project.id)
+
+        asyncio.ensure_future(_do())
+
+    @kb.add("r", filter=is_projects & no_float)
+    def _(event):
+        if state.showing_exports:
+            return
+        filtered = fuzzy_filter_projects(state.projects, project_search.text)
+        idx = project_list.selected_index
+        if idx >= len(filtered):
+            return
+        project = filtered[idx]
+
+        async def _do():
+            dlg = InputDialog(title="Rename", label_text="New name:",
+                              initial=project.name, ok_text="Rename")
+            new_name = await show_dialog_as_float(state, dlg)
+            if new_name:
+                p = state.storage.load_project(project.id)
+                if p:
+                    p.name = new_name
+                    state.storage.save_project(p)
+                    refresh_projects(project_search.text)
+                    show_notification(state, f"Renamed to '{new_name}'.")
+
+        asyncio.ensure_future(_do())
+
+    @kb.add("d", filter=is_projects & no_float)
+    def _(event):
+        if state.showing_exports:
+            return
+        filtered = fuzzy_filter_projects(state.projects, project_search.text)
+        idx = project_list.selected_index
+        if idx >= len(filtered):
+            return
+        project = filtered[idx]
+
+        async def _do():
+            dlg = ConfirmDialog(f"Delete '{project.name}'?")
+            ok = await show_dialog_as_float(state, dlg)
+            if ok:
+                state.storage.delete_project(project.id)
+                refresh_projects(project_search.text)
+                show_notification(state, "Manuscript deleted.")
+
+        asyncio.ensure_future(_do())
+
+    @kb.add("e", filter=is_projects & no_float)
+    def _(event):
+        toggle_exports()
+
+    @kb.add("m", filter=is_projects & no_float)
+    def _(event):
+        if state.showing_exports:
+            return
+        now = time.monotonic()
+        if now - state.mass_export_pending < 2.0:
+            state.mass_export_pending = 0.0
+            do_mass_export_md()
+        else:
+            state.mass_export_pending = now
+            show_notification(state, "Press m again to export all as Markdown.", duration=2.0)
+
+    @kb.add("down", filter=is_projects & no_float)
+    def _(event):
+        focused = event.app.layout.current_window
+        if focused == project_search.window:
+            if state.showing_exports:
+                event.app.layout.focus(export_list.window)
+            else:
+                event.app.layout.focus(project_list.window)
+
+    @kb.add("enter", filter=is_projects & no_float)
+    def _(event):
+        focused = event.app.layout.current_window
+        if focused == project_search.window:
+            filtered = fuzzy_filter_projects(state.projects, project_search.text)
+            if filtered:
+                open_project(filtered[0].id)
+
+    # -- Editor screen --
+    @kb.add("c-s", filter=is_editor & no_float)
+    def _(event):
+        do_save()
+
+    @kb.add("c-b", filter=is_editor & no_float)
+    def _(event):
+        do_bold()
+
+    @kb.add("c-i", filter=is_editor & no_float)
+    def _(event):
+        do_italic()
+
+    @kb.add("c-n", filter=is_editor & no_float)
+    def _(event):
+        do_footnote()
+
+    @kb.add("c-h", filter=is_editor & no_float)
+    def _(event):
+        toggle_keybindings()
+
+    @kb.add("c-r", filter=is_editor & no_float)
+    def _(event):
+        if not state.current_project:
+            return
+        sources = state.current_project.get_sources()
+        if not sources:
+            show_notification(state, "No sources. Add sources first (^O).")
+            return
+
+        async def _do():
+            dlg = CitePickerDialog(sources)
+            footnote = await show_dialog_as_float(state, dlg)
+            if footnote:
+                editor_area.buffer.insert_text(footnote)
+
+        asyncio.ensure_future(_do())
+
+    @kb.add("c-o", filter=is_editor & no_float)
+    def _(event):
+        if not state.current_project:
+            return
+        do_save(notify=False)
+
+        async def _do():
+            dlg = SourcesDialog(state, state.current_project)
+            await show_dialog_as_float(state, dlg)
+            reloaded = state.storage.load_project(state.current_project.id)
+            if reloaded:
+                state.current_project = reloaded
+
+        asyncio.ensure_future(_do())
+
+    @kb.add("c-p", filter=no_float)
+    def _(event):
+        async def _do():
+            cmds = []
+            if state.screen == "editor":
+                cmds = [
+                    ("Bibliography", "Insert bibliography", do_bibliography),
+                    ("Export", "Export document", None),
+                    ("Insert blank footnote", "^N", do_footnote),
+                    ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
+                    ("Insert reference", "^R", None),
+                    ("Keybindings", "^H", toggle_keybindings),
+                    ("Return to manuscripts", "Esc", return_to_projects),
+                    ("Save", "^S", lambda: do_save()),
+                    ("Sources", "^O", None),
+                    ("Import .bib file", "BibTeX import", None),
+                ]
+            else:
+                cmds = [
+                    ("Exports", "Toggle exports", toggle_exports),
+                    ("New manuscript", "Create new", None),
+                    ("Quit", "Exit app", None),
+                ]
+            dlg = CommandPaletteDialog(cmds)
+            action = await show_dialog_as_float(state, dlg)
+            if action and callable(action):
+                action()
+            elif action is None:
+                pass
+            # Handle special commands that need async
+            # (Export, Cite, Sources are handled inline below)
+
+        async def _do_full():
+            cmds_map = {}
+            if state.screen == "editor":
+
+                async def cmd_export():
+                    dlg = ExportFormatDialog()
+                    fmt = await show_dialog_as_float(state, dlg)
+                    if fmt:
+                        await run_export(fmt)
+
+                async def cmd_cite():
+                    sources = state.current_project.get_sources() if state.current_project else []
+                    if not sources:
+                        show_notification(state, "No sources.")
+                        return
+                    dlg = CitePickerDialog(sources)
+                    fn = await show_dialog_as_float(state, dlg)
+                    if fn:
+                        editor_area.buffer.insert_text(fn)
+
+                async def cmd_sources():
+                    do_save(notify=False)
+                    dlg = SourcesDialog(state, state.current_project)
+                    await show_dialog_as_float(state, dlg)
+                    reloaded = state.storage.load_project(state.current_project.id)
+                    if reloaded:
+                        state.current_project = reloaded
+
+                async def cmd_bib_import():
+                    dlg = BibImportDialog()
+                    sources = await show_dialog_as_float(state, dlg)
+                    if sources and state.current_project:
+                        for s in sources:
+                            state.current_project.add_source(s)
+                        state.storage.save_project(state.current_project)
+                        show_notification(state, f"Imported {len(sources)} source(s).")
+
+                cmds = [
+                    ("Bibliography", "Insert bibliography", do_bibliography),
+                    ("Export", "Export document", cmd_export),
+                    ("Insert blank footnote", "^N", do_footnote),
+                    ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
+                    ("Insert reference", "^R", cmd_cite),
+                    ("Keybindings", "^H", toggle_keybindings),
+                    ("Return to manuscripts", "Esc", return_to_projects),
+                    ("Save", "^S", lambda: do_save()),
+                    ("Sources", "^O", cmd_sources),
+                    ("Import .bib file", "BibTeX import", cmd_bib_import),
+                ]
+            else:
+                cmds = [
+                    ("Exports", "Toggle exports", toggle_exports),
+                    ("New manuscript", "Create new", None),
+                    ("Quit", "Exit app", None),
+                ]
+            dlg = CommandPaletteDialog(cmds)
+            action = await show_dialog_as_float(state, dlg)
+            if action is not None:
+                if asyncio.iscoroutinefunction(action):
+                    await action()
+                elif callable(action):
+                    action()
+
+        asyncio.ensure_future(_do_full())
+
+    @kb.add("c-up", filter=is_editor & no_float)
+    def _(event):
+        editor_area.buffer.cursor_position = 0
+
+    @kb.add("c-down", filter=is_editor & no_float)
+    def _(event):
+        editor_area.buffer.cursor_position = len(editor_area.text)
+
+    # ── Style ────────────────────────────────────────────────────────
+
+    style = PtStyle.from_dict({
+        "": "#e0e0e0 bg:#2a2a2a",
+        "title": "#e0e0e0",
+        "status": "#8a8a8a bg:#333333",
+        "hint": "#777777",
+        "accent": "#e0af68",
+        "input": "bg:#333333 #e0e0e0",
+        "editor": "",
+        "select-list": "",
+        "select-list.selected": "bg:#444444",
+        "select-list.empty": "#777777",
+        "keybindings-panel": "bg:#2a2a2a",
+        "form-label": "#aaaaaa",
+        "dialog": "bg:#2a2a2a",
+        "dialog.body": "bg:#2a2a2a",
+        "dialog frame.label": "#e0e0e0 bold",
+        "dialog shadow": "bg:#111111",
+        "button": "#e0e0e0 bg:#555555",
+        "button.focused": "#e0e0e0 bg:#777777",
+        # Pygments token styles
+        "pygments.comment": "#666666",
+        "pygments.text": "",
+        "pygments.generic.heading": "bold #e0af68",
+        "pygments.generic.strong": "bold",
+        "pygments.generic.emph": "italic",
+        "pygments.literal.string": "#a0a0a0",
+        "pygments.comment.special": "#7aa2f7",
+        "pygments.name.tag": "#7aa2f7",
+        "pygments.name.attribute": "#666666",
+    })
+
+    # ── Build Application ────────────────────────────────────────────
+
+    layout = Layout(root, focused_element=project_search.window)
+
+    app = Application(
+        layout=layout,
+        key_bindings=kb,
+        style=style,
+        full_screen=True,
+        mouse_support=False,
+    )
+
+    return app
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -2870,7 +2677,7 @@ def main() -> None:
     else:
         data_dir = Path.home() / "Documents" / "Manuscripts"
 
-    app = ManuscriptsApp(data_dir)
+    app = create_app(Storage(data_dir))
     app.run()
 
 

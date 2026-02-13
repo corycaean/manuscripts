@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# manuscripts launcher — uses venv if available, otherwise vendored dependencies.
+# manuscripts launcher — uses venv with prompt_toolkit.
 #
 # Usage:
 #   ./run.sh                    # normal run
@@ -9,16 +9,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Prefer venv if it exists (has tree-sitter support)
+# Prefer venv if it exists
 if [ -f "${SCRIPT_DIR}/.venv/bin/python3" ]; then
     exec "${SCRIPT_DIR}/.venv/bin/python3" "${SCRIPT_DIR}/manuscripts.py" "$@"
 fi
 
-# Fall back to vendored dependencies
-RICH_SRC="${SCRIPT_DIR}/vendor/rich"
-MDIT_SRC="${SCRIPT_DIR}/vendor/mdit-py-plugins"
-TEXTUAL_SRC="${SCRIPT_DIR}/vendor/textual/src"
-
-export PYTHONPATH="${RICH_SRC}:${MDIT_SRC}:${TEXTUAL_SRC}:${PYTHONPATH:-}"
-
+# Fall back to system python (prompt_toolkit must be installed)
 exec python3 "${SCRIPT_DIR}/manuscripts.py" "$@"
