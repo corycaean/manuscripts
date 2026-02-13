@@ -2095,50 +2095,20 @@ class FindDialog:
                 Document(last_query, len(last_query)), bypass_readonly=True,
             )
 
-        search_kb = KeyBindings()
+        field_kb = KeyBindings()
 
-        @search_kb.add("enter")
-        def _next(event):
-            self._move(1)
-
-        @search_kb.add("s-enter")
-        def _prev(event):
-            self._move(-1)
-
-        @search_kb.add("escape", eager=True)
+        @field_kb.add("escape", eager=True)
         def _escape(event):
             self.cancel()
 
-        @search_kb.add("tab")
-        def _to_replace(event):
-            event.app.layout.focus(self.replace_window)
-
-        replace_kb = KeyBindings()
-
-        @replace_kb.add("enter")
-        def _do_replace(event):
-            self._replace_one()
-
-        @replace_kb.add("c-enter")
-        def _do_replace_all(event):
-            self._replace_all()
-
-        @replace_kb.add("escape", eager=True)
-        def _escape_r(event):
-            self.cancel()
-
-        @replace_kb.add("s-tab")
-        def _to_search(event):
-            event.app.layout.focus(self.search_window)
-
         self.search_control = BufferControl(
-            buffer=self.search_buf, key_bindings=search_kb,
+            buffer=self.search_buf, key_bindings=field_kb,
         )
         self.search_window = Window(
             content=self.search_control, height=1, style="class:input",
         )
         self.replace_control = BufferControl(
-            buffer=self.replace_buf, key_bindings=replace_kb,
+            buffer=self.replace_buf, key_bindings=field_kb,
         )
         self.replace_window = Window(
             content=self.replace_control, height=1, style="class:input",
@@ -2153,8 +2123,16 @@ class FindDialog:
             body=HSplit([
                 Label(text="Find:"),
                 self.search_window,
+                VSplit([
+                    Button(text="Next", handler=lambda: self._move(1)),
+                    Button(text="Prev", handler=lambda: self._move(-1)),
+                ], padding=1),
                 Label(text="Replace:"),
                 self.replace_window,
+                VSplit([
+                    Button(text="Replace", handler=self._replace_one),
+                    Button(text="All", handler=self._replace_all),
+                ], padding=1),
                 Window(content=self.status_control, height=1),
             ]),
             buttons=[Button(text="Close", handler=self.cancel)],
