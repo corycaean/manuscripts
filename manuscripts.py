@@ -902,7 +902,7 @@ def fuzzy_filter_projects(projects: list[Project], query: str) -> list[Project]:
             scored.append((100.0, p))
         else:
             ratio = SequenceMatcher(None, q, hay).ratio() * 100
-            if ratio > 30:
+            if ratio > 55:
                 scored.append((ratio, p))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [p for _, p in scored]
@@ -1211,7 +1211,7 @@ class SelectableList:
             self._get_text, focusable=True, key_bindings=self._kb,
         )
         self.window = Window(
-            content=self.control, style="class:select-list", wrap_lines=True,
+            content=self.control, style="class:select-list", wrap_lines=False,
         )
 
     def _get_text(self):
@@ -1248,6 +1248,7 @@ class AppState:
         self.notification = ""
         self.notification_task = None
         self.quit_pending = 0.0
+        self.escape_pending = 0.0
         self.mass_export_pending = 0.0
         self.showing_exports = False
         self.show_keybindings = False
@@ -1620,13 +1621,22 @@ class SourceFormDialog:
     def _switch_type(self, stype, app=None):
         self.current_type = stype
         if app:
-            first_key = SOURCE_FIELDS[stype][0][0]
-            buf = self.field_inputs[(stype, first_key)]
-            for w in app.layout.find_all_windows():
-                c = w.content
-                if isinstance(c, BufferControl) and c.buffer is buf:
-                    app.layout.focus(w)
-                    break
+            app.invalidate()
+
+            async def _focus_later():
+                await asyncio.sleep(0)
+                try:
+                    first_key = SOURCE_FIELDS[stype][0][0]
+                    buf = self.field_inputs[(stype, first_key)]
+                    for w in app.layout.find_all_windows():
+                        c = w.content
+                        if isinstance(c, BufferControl) and c.buffer is buf:
+                            app.layout.focus(w)
+                            break
+                except (ValueError, KeyError):
+                    pass
+
+            asyncio.ensure_future(_focus_later())
 
     def _do_save(self):
         if not self.current_type:
@@ -2485,7 +2495,7 @@ def create_app(storage):
     projects_list_focused = is_projects & no_float & search_not_focused
 
     # -- Global --
-    @kb.add("escape")
+    @kb.add("escape", eager=True)
     def _(event):
         if state.root_container.floats:
             dialog = state.root_container.floats[0].content
@@ -2494,7 +2504,18 @@ def create_app(storage):
             elif hasattr(dialog, 'future') and not dialog.future.done():
                 dialog.future.set_result(None)
         elif state.screen == "editor":
-            return_to_projects()
+            now = time.monotonic()
+            if now - state.escape_pending < 2.0:
+                state.escape_pending = 0.0
+                return_to_projects()
+            else:
+                state.escape_pending = now
+                show_notification(state,
+                                  "Press Esc again to return to manuscripts.",
+                                  duration=2.0)
+        elif state.screen == "projects":
+            # Return focus to search field from project list
+            event.app.layout.focus(project_search.window)
 
     @kb.add("c-q")
     def _(event):
@@ -2583,6 +2604,10 @@ def create_app(storage):
             state.mass_export_pending = now
             show_notification(state, "Press m again to export all as Markdown.", duration=2.0)
 
+    @kb.add("/", filter=projects_list_focused)
+    def _(event):
+        event.app.layout.focus(project_search.window)
+
     search_focused = Condition(
         lambda: state.screen == "projects"
         and len(state.root_container.floats) == 0
@@ -2605,6 +2630,14 @@ def create_app(storage):
     @kb.add("c-s", filter=is_editor & no_float)
     def _(event):
         do_save()
+
+    @kb.add("c-z", filter=is_editor & no_float)
+    def _(event):
+        editor_area.buffer.undo()
+
+    @kb.add("c-y", filter=is_editor & no_float)
+    def _(event):
+        editor_area.buffer.redo()
 
     @kb.add("c-b", filter=is_editor & no_float)
     def _(event):
@@ -2835,12 +2868,14 @@ def create_app(storage):
         "select-list.empty": "#777777",
         "keybindings-panel": "bg:#2a2a2a",
         "form-label": "#aaaaaa",
-        "dialog": "bg:#2a2a2a",
-        "dialog.body": "bg:#2a2a2a",
+        "dialog": "#e0e0e0 bg:#2a2a2a",
+        "dialog.body": "#e0e0e0 bg:#2a2a2a",
+        "dialog text-area": "#e0e0e0 bg:#333333",
         "dialog frame.label": "#e0e0e0 bold",
         "dialog shadow": "bg:#111111",
         "button": "#e0e0e0 bg:#555555",
         "button.focused": "#e0e0e0 bg:#777777",
+        "label": "#e0e0e0",
         # Markdown inline styles
         "md.heading-marker": "#666666",
         "md.heading": "bold #e0af68",
