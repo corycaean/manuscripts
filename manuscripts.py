@@ -1568,14 +1568,16 @@ class SourceFormDialog:
             rows = []
             for field_key, label in SOURCE_FIELDS[stype]:
                 buf = self.field_inputs[(stype, field_key)]
-                rows.append(Window(
-                    FormattedTextControl([("class:form-label", f" {label}: ")]),
-                    height=1, dont_extend_height=True,
-                ))
-                rows.append(Window(
-                    BufferControl(buffer=buf), height=1,
-                    style="class:input", dont_extend_height=True,
-                ))
+                rows.append(VSplit([
+                    Window(
+                        FormattedTextControl([("class:form-label", f" {label}: ")]),
+                        width=22, height=1, dont_extend_height=True,
+                    ),
+                    Window(
+                        BufferControl(buffer=buf), height=1,
+                        style="class:input", dont_extend_height=True,
+                    ),
+                ], height=1))
             self._field_containers[stype] = HSplit(rows)
 
         type_kb = KeyBindings()
@@ -1603,7 +1605,6 @@ class SourceFormDialog:
             title="Add Source",
             body=HSplit([
                 self.type_window,
-                Window(height=1, char=" "),
                 self._body_container,
             ]),
             buttons=[
