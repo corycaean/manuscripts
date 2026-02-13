@@ -2247,6 +2247,29 @@ def create_app(storage):
                 show_notification(state, "Copied.")
             buf.exit_selection()
 
+    @_editor_cb_kb.add("c-a")
+    def _select_all(event):
+        buf = event.current_buffer
+        buf.cursor_position = 0
+        buf.start_selection()
+        buf.cursor_position = len(buf.text)
+
+    @_editor_cb_kb.add("c-x")
+    def _cut(event):
+        buf = event.current_buffer
+        if buf.selection_state:
+            start = buf.selection_state.original_cursor_position
+            end = buf.cursor_position
+            if start > end:
+                start, end = end, start
+            selected = buf.text[start:end]
+            if selected:
+                _clipboard_copy(selected)
+                show_notification(state, "Cut.")
+            buf.exit_selection()
+            new_text = buf.text[:start] + buf.text[end:]
+            buf.set_document(Document(new_text, start), bypass_readonly=True)
+
     editor_area.control.key_bindings = _editor_cb_kb
 
     def get_status_text():
