@@ -48,6 +48,28 @@ from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Button, Dialog, Label, TextArea
 
 # ════════════════════════════════════════════════════════════════════════
+#  Config
+# ════════════════════════════════════════════════════════════════════════
+
+_CONFIG_DIR = Path.home() / ".config" / "manuscripts"
+_CONFIG_FILE = _CONFIG_DIR / "config.json"
+
+
+def _load_config() -> dict:
+    try:
+        with open(_CONFIG_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_config(cfg: dict) -> None:
+    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  Data Models
 # ════════════════════════════════════════════════════════════════════════
 
@@ -239,6 +261,8 @@ class Storage:
     def list_projects(self) -> list[Project]:
         projects: list[Project] = []
         for p in self.projects_dir.glob("*.json"):
+            if p.name.startswith("."):
+                continue
             try:
                 with open(p) as f:
                     projects.append(Project(**json.load(f)))
@@ -1219,8 +1243,11 @@ class SelectableList:
             return [("class:select-list.empty", "  (empty)\n")]
         result = []
         for i, (_, label) in enumerate(self.items):
-            s = "class:select-list.selected" if i == self.selected_index else ""
-            result.append((s, f"  {label}\n"))
+            if i == self.selected_index:
+                result.append(("[SetCursorPosition]", ""))
+                result.append(("class:select-list.selected", f"  {label}\n"))
+            else:
+                result.append(("", f"  {label}\n"))
         return result
 
     def set_items(self, items):
@@ -1256,11 +1283,12 @@ class AppState:
         self.root_container = None
         self.auto_save_task = None
         self.export_paths = []
-        self.show_word_count = False
+        self.show_word_count = 2  # 0=words, 1=paragraphs, 2=off
         self.last_find_query = ""
         self.show_find_panel = False
         self.find_panel = None
         self.shutdown_pending = 0.0
+        self.pinned_projects: set[str] = set(_load_config().get("pinned", []))
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1319,26 +1347,40 @@ def _detect_printers():
         return []
 
 
+_clip_copy_cmd = None
+_clip_paste_cmd = None
+
+for _cmd in [["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"]]:
+    if shutil.which(_cmd[0]):
+        _clip_copy_cmd = _cmd
+        break
+
+for _cmd in [["pbpaste"], ["wl-paste", "--no-newline"], ["xclip", "-selection", "clipboard", "-o"]]:
+    if shutil.which(_cmd[0]):
+        _clip_paste_cmd = _cmd
+        break
+
+
 def _clipboard_copy(text):
     """Copy text to system clipboard."""
-    for cmd in [["wl-copy"], ["xclip", "-selection", "clipboard"]]:
+    if _clip_copy_cmd:
         try:
-            subprocess.run(cmd, input=text, text=True, timeout=2)
+            subprocess.run(_clip_copy_cmd, input=text, text=True, timeout=2)
             return True
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
+        except subprocess.TimeoutExpired:
+            return False
     return False
 
 
 def _clipboard_paste():
     """Get text from system clipboard."""
-    for cmd in [["wl-paste", "--no-newline"], ["xclip", "-selection", "clipboard", "-o"]]:
+    if _clip_paste_cmd:
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+            result = subprocess.run(_clip_paste_cmd, capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 return result.stdout
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
+        except subprocess.TimeoutExpired:
+            pass
     return None
 
 
@@ -1375,7 +1417,7 @@ class InputDialog:
 
         self.text_area.buffer.accept_handler = accept
         ok_btn = Button(text=ok_text, handler=accept)
-        cancel_btn = Button(text="(c) Cancel", handler=self.cancel)
+        cancel_btn = Button(text="Cancel", handler=self.cancel)
         self.dialog = Dialog(
             title=title,
             body=HSplit([Label(text=label_text), self.text_area]),
@@ -1426,8 +1468,8 @@ class ConfirmDialog:
             title="Confirm",
             body=Window(content=self._control, height=3),
             buttons=[
-                Button(text="(y) Yes", handler=yes_handler),
-                Button(text="(n) No", handler=no_handler),
+                Button(text="Yes", handler=yes_handler),
+                Button(text="No", handler=no_handler),
             ],
             modal=True,
             width=D(preferred=50),
@@ -1463,7 +1505,7 @@ class ExportFormatDialog:
         self.dialog = Dialog(
             title="Export as",
             body=HSplit([self.list], padding=0),
-            buttons=[Button(text="(c) Cancel", handler=self.cancel)],
+            buttons=[Button(text="Cancel", handler=self.cancel)],
             modal=True,
             width=D(preferred=40, max=50),
         )
@@ -1499,7 +1541,7 @@ class PrinterPickerDialog:
         self.dialog = Dialog(
             title="Print to",
             body=HSplit([self.list]),
-            buttons=[Button(text="(c) Cancel", handler=self.cancel)],
+            buttons=[Button(text="Cancel", handler=self.cancel)],
             modal=True,
             width=D(preferred=50, max=60),
         )
@@ -1652,7 +1694,7 @@ class SourceFormDialog:
             ]),
             buttons=[
                 Button(text="Save", handler=do_save),
-                Button(text="(c) Cancel", handler=self.cancel),
+                Button(text="Cancel", handler=self.cancel),
             ],
             modal=True,
             width=D(preferred=80, max=100),
@@ -1831,9 +1873,9 @@ class SourcesDialog:
             title=f"Sources: {project.name}",
             body=HSplit([self.source_list]),
             buttons=[
-                Button(text="(a) Add", handler=lambda: _add(None)),
-                Button(text="(i) Import", handler=lambda: _import(None)),
-                Button(text="(c) Close", handler=close),
+                Button(text="Add", handler=lambda: _add(None)),
+                Button(text="Import", handler=lambda: _import(None)),
+                Button(text="Close", handler=close),
             ],
             modal=True,
             width=D(preferred=80, max=100),
@@ -1891,7 +1933,7 @@ class BibImportDialog:
             ]),
             buttons=[
                 Button(text="Import", handler=do_import),
-                Button(text="(c) Cancel", handler=self.cancel),
+                Button(text="Cancel", handler=self.cancel),
             ],
             modal=True,
         )
@@ -2105,6 +2147,7 @@ class FindReplacePanel:
         @search_kb.add("enter")
         def _search_enter(event):
             self._move(1)
+            get_app().layout.focus(self.editor_area)
 
         @search_kb.add("tab")
         def _search_tab(event):
@@ -2158,17 +2201,14 @@ class FindReplacePanel:
 
         def get_hints():
             return [
-                ("class:accent bold", "  Ret"), ("", "  Next / Repl\n"),
-                ("class:accent bold", "  Tab"), ("", "  Next field\n"),
-                ("class:accent bold", "  ^F "), ("", "  Editor\n"),
-                ("class:accent bold", "  Esc"), ("", "  Close\n"),
+                ("class:accent bold", " ret"), ("", "  Highlight match\n"),
+                ("class:accent bold", "  ^k"), ("", "  Next result\n"),
+                ("class:accent bold", "  ^j"), ("", "  Previous result\n"),
+                ("class:accent bold", "  ^f"), ("", "  Switch panel\n"),
+                ("class:accent bold", " esc"), ("", "  Close\n"),
             ]
 
         self.container = HSplit([
-            Window(FormattedTextControl(
-                [("class:accent bold", " Find/Replace\n")],
-            ), height=1),
-            Window(height=1, char="─", style="class:hint"),
             Label(text=" Find:"),
             self.search_window,
             Window(content=self.status_control, height=1),
@@ -2176,8 +2216,8 @@ class FindReplacePanel:
             self.replace_window,
             self.replace_all_window,
             Window(height=1),
-            Window(FormattedTextControl(get_hints), height=4),
-        ], width=28, style="class:find-panel")
+            Window(FormattedTextControl(get_hints), height=5),
+        ], width=24, style="class:find-panel")
 
     def _scroll_to_cursor(self):
         if self.editor_area is not None:
@@ -2314,9 +2354,16 @@ def create_app(storage):
     project_list = SelectableList()
     export_list = SelectableList()
     hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (n) New  (r) Rename  (d) Delete  (e) Exports  (/) Search")])
-    shutdown_hint_control = FormattedTextControl(
-        lambda: [("class:hint", "⌃S Shut down ")])
+        lambda: [("class:hint", " (n) New  (r) Rename  (d) Delete  (e) Exports  (p) Pin  (/) Search")])
+    def _get_shutdown_hint():
+        now = time.monotonic()
+        if now - state.quit_pending < 2.0:
+            return [("class:accent bold", " (^q) press again to quit ")]
+        if state.shutdown_pending and now - state.shutdown_pending < 2.0:
+            return [("class:accent bold", " (^s) press again to shut down ")]
+        return [("class:hint", " (^q) quit  (^s) shut down ")]
+
+    shutdown_hint_control = FormattedTextControl(_get_shutdown_hint)
     hints_window = VSplit([
         Window(content=hints_control, height=1),
         Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
@@ -2331,13 +2378,16 @@ def create_app(storage):
         elif not filtered:
             project_list.set_items([("__empty__", "No matching manuscripts.")])
         else:
+            pinned = [p for p in filtered if p.name in state.pinned_projects]
+            unpinned = [p for p in filtered if p.name not in state.pinned_projects]
             items = []
-            for p in filtered:
+            for p in pinned + unpinned:
                 try:
                     mod = datetime.fromisoformat(p.modified).strftime("%b %d, %Y")
                 except (ValueError, TypeError):
                     mod = ""
-                items.append((p.id, f"{p.name}  ({mod})"))
+                prefix = "* " if p.name in state.pinned_projects else "  "
+                items.append((p.id, f"{prefix}{p.name}  ({mod})"))
             project_list.set_items(items)
 
     def refresh_exports():
@@ -2372,6 +2422,16 @@ def create_app(storage):
             state.current_project = project
             state.editor_dirty = False
             editor_area.text = project.content
+            # Place cursor below YAML front matter
+            content = project.content
+            cursor_pos = 0
+            if content.startswith("---\n"):
+                end = content.find("\n---\n", 4)
+                if end != -1:
+                    cursor_pos = end + 5
+                    while cursor_pos < len(content) and content[cursor_pos] == "\n":
+                        cursor_pos += 1
+            editor_area.buffer.cursor_position = cursor_pos
             state.screen = "editor"
             get_app().layout.focus(editor_area.window)
             if state.auto_save_task:
@@ -2505,14 +2565,17 @@ def create_app(storage):
         if state.notification:
             return [("class:status", f" {state.notification}")]
         if state.current_project:
-            if state.show_word_count:
+            if state.show_word_count == 0:
                 words = _word_count(editor_area.text)
                 return [("class:status",
                          f" {state.current_project.name}  {words} words")]
-            else:
+            elif state.show_word_count == 1:
                 paras = _para_count(editor_area.text)
                 return [("class:status",
                          f" {state.current_project.name}  {paras} \u00b6")]
+            else:
+                return [("class:status",
+                         f" {state.current_project.name}")]
         return [("class:status", "")]
 
     status_bar = Window(
@@ -2521,14 +2584,14 @@ def create_app(storage):
 
     def get_keybindings_text():
         sections = [
-            [("Esc", "Manuscripts"), ("^O", "Sources"),
-             ("^P", "Commands"), ("^Q", "Quit"), ("^S", "Save")],
-            [("^B", "Bold"), ("^I", "Italic"), ("^N", "Footnote"),
-             ("^R", "Cite"), ("^F", "Find/Replace")],
-            [("^Z", "Undo"), ("^sZ", "Redo"),
-             ("^Up", "Top"), ("^Dn", "Bottom")],
-            [("^W", "Word/para"), ("^G", "This panel"),
-             ("^S", "Shutdown*")],
+            [("esc", "Manuscripts"), ("^o", "Sources"),
+             ("^p", "Commands"), ("^q", "Quit"), ("^s", "Save")],
+            [("^b", "Bold"), ("^i", "Italic"), ("^n", "Footnote"),
+             ("^r", "Cite"), ("^f", "Find/Replace")],
+            [("^z", "Undo"), ("^y", "Redo"),
+             ("^up", "Top"), ("^dn", "Bottom")],
+            [("^w", "Word/para"), ("^g", "This panel"),
+             ("^s", "Shutdown*")],
         ]
         result = []
         for i, section in enumerate(sections):
@@ -2907,6 +2970,8 @@ def create_app(storage):
     is_projects = Condition(lambda: state.screen == "projects")
     is_editor = Condition(lambda: state.screen == "editor")
     no_float = Condition(lambda: len(state.root_container.floats) == 0)
+    find_panel_open = Condition(
+        lambda: state.show_find_panel and state.find_panel is not None)
     search_not_focused = Condition(
         lambda: get_app().layout.current_window != project_search.window)
     projects_list_focused = is_projects & no_float & search_not_focused
@@ -2934,7 +2999,7 @@ def create_app(storage):
             else:
                 state.escape_pending = now
                 show_notification(state,
-                                  "Press Esc again to return to manuscripts.",
+                                  "Press esc again to return to manuscripts.",
                                   duration=2.0)
         elif state.screen == "projects":
             if state.showing_exports:
@@ -2951,7 +3016,7 @@ def create_app(storage):
             event.app.exit()
         else:
             state.quit_pending = now
-            show_notification(state, "Press Ctrl+Q again to quit.", duration=2.0)
+            show_notification(state, "Press ^q again to quit.", duration=2.0)
 
     # -- Projects screen --
     @kb.add("n", filter=projects_list_focused)
@@ -3047,6 +3112,25 @@ def create_app(storage):
             state.mass_export_pending = now
             show_notification(state, "Press m again to export all as Markdown.", duration=2.0)
 
+    @kb.add("p", filter=projects_list_focused)
+    def _(event):
+        if not project_list.items:
+            return
+        idx = project_list.selected_index
+        pid, _ = project_list.items[idx]
+        if pid == "__empty__":
+            return
+        proj = next((p for p in state.projects if p.id == pid), None)
+        if proj:
+            if proj.name in state.pinned_projects:
+                state.pinned_projects.discard(proj.name)
+            else:
+                state.pinned_projects.add(proj.name)
+            cfg = _load_config()
+            cfg["pinned"] = sorted(state.pinned_projects)
+            _save_config(cfg)
+            refresh_projects(project_search.text)
+
     @kb.add("/", filter=projects_list_focused)
     def _(event):
         event.app.layout.focus(project_search.window)
@@ -3077,7 +3161,7 @@ def create_app(storage):
             event.app.exit()
         else:
             state.shutdown_pending = now
-            show_notification(state, "Press Ctrl+S again to shut down.", duration=2.0)
+            show_notification(state, "Press ^s again to shut down.", duration=2.0)
 
     # -- Editor screen --
     @kb.add("c-s", filter=is_editor & no_float)
@@ -3088,9 +3172,21 @@ def create_app(storage):
     def _(event):
         editor_area.buffer.undo()
 
-    @kb.add("c-y", filter=is_editor & no_float)
+    @kb.add("c-y", filter=is_editor & no_float, save_before=lambda e: False)
     def _(event):
         editor_area.buffer.redo()
+
+    @kb.add("left", filter=is_editor & no_float)
+    def _(event):
+        buf = editor_area.buffer
+        if buf.cursor_position > 0:
+            buf.cursor_position -= 1
+
+    @kb.add("right", filter=is_editor & no_float)
+    def _(event):
+        buf = editor_area.buffer
+        if buf.cursor_position < len(buf.text):
+            buf.cursor_position += 1
 
     @kb.add("c-b", filter=is_editor & no_float)
     def _(event):
@@ -3106,8 +3202,18 @@ def create_app(storage):
 
     @kb.add("c-w", filter=is_editor & no_float)
     def _(event):
-        state.show_word_count = not state.show_word_count
+        state.show_word_count = (state.show_word_count + 1) % 3
         get_app().invalidate()
+
+    @kb.add("c-k", filter=is_editor & no_float & find_panel_open)
+    def _(event):
+        state.find_panel._rebuild_matches()
+        state.find_panel._move(1)
+
+    @kb.add("c-j", filter=is_editor & no_float & find_panel_open)
+    def _(event):
+        state.find_panel._rebuild_matches()
+        state.find_panel._move(-1)
 
     @kb.add("c-g", filter=is_editor & no_float)
     def _(event):
@@ -3409,6 +3515,17 @@ def main() -> None:
         data_dir = Path(os.environ["MANUSCRIPTS_DATA"])
     else:
         data_dir = Path.home() / "Documents" / "Manuscripts"
+
+    # Disable terminal dsusp (^Y) so Ctrl+Y reaches the application
+    try:
+        import termios
+        fd = sys.stdin.fileno()
+        attrs = termios.tcgetattr(fd)
+        VDSUSP = termios.VDSUSP
+        attrs[6][VDSUSP] = b'\x00'
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except (ImportError, AttributeError, termios.error):
+        pass
 
     app = create_app(Storage(data_dir))
     app.run()
