@@ -2467,9 +2467,9 @@ def create_app(storage):
                    height=1, dont_extend_height=True),
             Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
         ]),
-        Window(content=hints_control, height=1),
         project_list,
         project_search,
+        Window(content=hints_control, height=1),
     ])
 
     exports_hints_control = FormattedTextControl(
