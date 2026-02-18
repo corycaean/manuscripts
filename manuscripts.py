@@ -2467,6 +2467,7 @@ def create_app(storage):
                    height=1, dont_extend_height=True),
             Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
         ]),
+        Window(height=1, char="─", style="class:hint"),
         project_list,
         project_search,
         Window(content=hints_control, height=1),
