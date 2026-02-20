@@ -2948,7 +2948,7 @@ def create_app(storage):
     def get_commands():
         if state.screen == "editor":
             return [
-                ("Bibliography", "Insert bibliography", do_bibliography),
+                ("Insert bibliography", "Insert bibliography", do_bibliography),
                 ("Export", "Export document", lambda: asyncio.ensure_future(
                     show_dialog_as_float(state, ExportFormatDialog()).then(
                         lambda fmt: run_export(fmt) if fmt else None))),
@@ -2960,7 +2960,6 @@ def create_app(storage):
                 ("Return to manuscripts (Esc)", "Save and go back", return_to_projects),
                 ("Save (^S)", "Save document", lambda: do_save()),
                 ("Sources (^O)", "Manage sources", None),
-                ("Import .bib file", "Import BibTeX", None),
             ]
         else:
             return [
@@ -3317,7 +3316,7 @@ def create_app(storage):
             cmds = []
             if state.screen == "editor":
                 cmds = [
-                    ("Bibliography", "Insert bibliography", do_bibliography),
+                    ("Insert bibliography", "Insert bibliography", do_bibliography),
                     ("Export", "Export document", None),
                     ("Find", "^F", None),
                     ("Insert blank footnote", "^N", do_footnote),
@@ -3327,7 +3326,6 @@ def create_app(storage):
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", None),
-                    ("Import .bib file", "BibTeX import", None),
                 ]
             else:
                 cmds = [
@@ -3394,7 +3392,7 @@ def create_app(storage):
                         pass
 
                 cmds = [
-                    ("Bibliography", "Insert bibliography", do_bibliography),
+                    ("Insert bibliography", "Insert bibliography", do_bibliography),
                     ("Export", "Export document", cmd_export),
                     ("Find", "^F", cmd_find),
                     ("Insert blank footnote", "^N", do_footnote),
@@ -3404,7 +3402,6 @@ def create_app(storage):
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", cmd_sources),
-                    ("Import .bib file", "BibTeX import", cmd_bib_import),
                 ]
             else:
                 cmds = [
