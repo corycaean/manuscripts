@@ -2353,8 +2353,17 @@ def create_app(storage):
     )
     project_list = SelectableList()
     export_list = SelectableList()
-    hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (n) new  (r) rename  (d) delete  (c) copy  (e) exports  (p) pin  (/) search")])
+    def _get_hints():
+        sep = ("class:hint.sep", "  ·  ")
+        parts = [
+            ("class:hint", " (/) search"),
+            sep,
+            ("class:hint", "(c) copy  (d) delete  (n) new  (p) pin  (r) rename"),
+            sep,
+        ]
+        parts += _get_shutdown_hint()
+        return parts
+    hints_control = FormattedTextControl(_get_hints)
     def _get_shutdown_hint():
         now = time.monotonic()
         if now - state.quit_pending < 2.0:
@@ -2417,7 +2426,6 @@ def create_app(storage):
         if project:
             state.current_project = project
             state.editor_dirty = False
-            editor_area.text = project.content
             # Place cursor below YAML front matter
             content = project.content
             cursor_pos = 0
@@ -2427,7 +2435,7 @@ def create_app(storage):
                     cursor_pos = end + 5
                     while cursor_pos < len(content) and content[cursor_pos] == "\n":
                         cursor_pos += 1
-            editor_area.buffer.cursor_position = cursor_pos
+            editor_area.buffer.reset(document=Document(content, cursor_pos))
             state.screen = "editor"
             get_app().layout.focus(editor_area.window)
             if state.auto_save_task:
@@ -2544,12 +2552,14 @@ def create_app(storage):
             if start > end:
                 start, end = end, start
             selected = buf.text[start:end]
-            if selected:
-                _clipboard_copy(selected)
-                show_notification(state, "Cut.")
             buf.exit_selection()
-            new_text = buf.text[:start] + buf.text[end:]
-            buf.set_document(Document(new_text, start), bypass_readonly=True)
+            if selected:
+                if _clipboard_copy(selected):
+                    show_notification(state, "Cut.")
+                    new_text = buf.text[:start] + buf.text[end:]
+                    buf.set_document(Document(new_text, start), bypass_readonly=True)
+                else:
+                    show_notification(state, "Clipboard unavailable — text not deleted.")
 
     @_editor_cb_kb.add("c-u")
     def _ctrl_u(event):
@@ -2558,6 +2568,20 @@ def create_app(storage):
     @_editor_cb_kb.add("c-m")
     def _ctrl_m(event):
         event.current_buffer.newline()  # Explicit newline
+
+    @_editor_cb_kb.add("backspace")
+    def _backspace(event):
+        buf = event.current_buffer
+        if buf.selection_state:
+            start = buf.selection_state.original_cursor_position
+            end = buf.cursor_position
+            if start > end:
+                start, end = end, start
+            buf.exit_selection()
+            buf.set_document(Document(buf.text[:start] + buf.text[end:], start),
+                             bypass_readonly=True)
+        else:
+            buf.delete_before_cursor()
 
     editor_area.control.key_bindings = _editor_cb_kb
 
@@ -2612,7 +2636,7 @@ def create_app(storage):
         if state.show_find_panel and state.find_panel:
             parts.append(state.find_panel)
             parts.append(Window(width=1, char="│", style="class:hint"))
-        parts.append(editor_area)
+        parts.append(VSplit([Window(width=1), editor_area]))
         if state.show_keybindings:
             parts.append(Window(width=1, char="│", style="class:hint"))
             parts.append(keybindings_panel)
@@ -3471,6 +3495,152 @@ def create_app(storage):
     def _(event):
         editor_area.buffer.cursor_position = len(editor_area.text)
 
+    # ── Shift+arrow selection ────────────────────────────────────────
+
+    editor_has_selection = Condition(
+        lambda: bool(editor_area.buffer.selection_state))
+
+    @kb.add("s-left", filter=is_editor & no_float)
+    def _(event):
+        buf = editor_area.buffer
+        if not buf.selection_state:
+            buf.start_selection()
+        if buf.cursor_position > 0:
+            buf.cursor_position -= 1
+
+    @kb.add("s-right", filter=is_editor & no_float)
+    def _(event):
+        buf = editor_area.buffer
+        if not buf.selection_state:
+            buf.start_selection()
+        if buf.cursor_position < len(buf.text):
+            buf.cursor_position += 1
+
+    @kb.add("s-up", filter=is_editor & no_float)
+    def _(event):
+        buf = editor_area.buffer
+        if not buf.selection_state:
+            buf.start_selection()
+        doc = buf.document
+        row, col = doc.cursor_position_row, doc.cursor_position_col
+        width = _editor_width()
+        line = doc.lines[row]
+        starts, _ = _word_wrap_boundaries(line, width)
+        vline = 0
+        for idx, s in enumerate(starts):
+            if col >= s:
+                vline = idx
+        visual_col = col - starts[vline]
+        if vline > 0:
+            prev_start = starts[vline - 1]
+            prev_end = starts[vline] - 1
+            new_col = min(prev_start + visual_col, prev_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row, new_col)
+        elif row > 0:
+            prev_line = doc.lines[row - 1]
+            prev_starts, _ = _word_wrap_boundaries(prev_line, width)
+            last_start = prev_starts[-1]
+            new_col = min(last_start + visual_col, len(prev_line))
+            buf.cursor_position = doc.translate_row_col_to_index(row - 1, new_col)
+
+    @kb.add("s-down", filter=is_editor & no_float)
+    def _(event):
+        buf = editor_area.buffer
+        if not buf.selection_state:
+            buf.start_selection()
+        doc = buf.document
+        row, col = doc.cursor_position_row, doc.cursor_position_col
+        width = _editor_width()
+        line = doc.lines[row]
+        starts, _ = _word_wrap_boundaries(line, width)
+        vline = 0
+        for idx, s in enumerate(starts):
+            if col >= s:
+                vline = idx
+        visual_col = col - starts[vline]
+        if vline < len(starts) - 1:
+            next_start = starts[vline + 1]
+            next_end = starts[vline + 2] - 1 if vline + 2 < len(starts) else len(line)
+            new_col = min(next_start + visual_col, next_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row, new_col)
+        elif row < doc.line_count - 1:
+            next_line = doc.lines[row + 1]
+            next_starts, _ = _word_wrap_boundaries(next_line, width)
+            first_end = next_starts[1] - 1 if len(next_starts) > 1 else len(next_line)
+            new_col = min(visual_col, first_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row + 1, new_col)
+
+    # Cancel selection when plain arrow pressed (without shift)
+    @kb.add("left", filter=is_editor & no_float & editor_has_selection)
+    def _(event):
+        buf = editor_area.buffer
+        buf.exit_selection()
+        if buf.cursor_position > 0:
+            buf.cursor_position -= 1
+
+    @kb.add("right", filter=is_editor & no_float & editor_has_selection)
+    def _(event):
+        buf = editor_area.buffer
+        buf.exit_selection()
+        if buf.cursor_position < len(buf.text):
+            buf.cursor_position += 1
+
+    @kb.add("up", filter=is_editor & no_float & editor_has_selection)
+    def _(event):
+        buf = editor_area.buffer
+        buf.exit_selection()
+        doc = buf.document
+        row, col = doc.cursor_position_row, doc.cursor_position_col
+        width = _editor_width()
+        line = doc.lines[row]
+        starts, _ = _word_wrap_boundaries(line, width)
+        vline = 0
+        for idx, s in enumerate(starts):
+            if col >= s:
+                vline = idx
+        visual_col = col - starts[vline]
+        if vline > 0:
+            prev_start = starts[vline - 1]
+            prev_end = starts[vline] - 1
+            new_col = min(prev_start + visual_col, prev_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row, new_col)
+        elif row > 0:
+            prev_line = doc.lines[row - 1]
+            prev_starts, _ = _word_wrap_boundaries(prev_line, width)
+            last_start = prev_starts[-1]
+            new_col = min(last_start + visual_col, len(prev_line))
+            buf.cursor_position = doc.translate_row_col_to_index(row - 1, new_col)
+
+    @kb.add("down", filter=is_editor & no_float & editor_has_selection)
+    def _(event):
+        buf = editor_area.buffer
+        buf.exit_selection()
+        doc = buf.document
+        row, col = doc.cursor_position_row, doc.cursor_position_col
+        width = _editor_width()
+        line = doc.lines[row]
+        starts, _ = _word_wrap_boundaries(line, width)
+        vline = 0
+        for idx, s in enumerate(starts):
+            if col >= s:
+                vline = idx
+        visual_col = col - starts[vline]
+        if vline < len(starts) - 1:
+            next_start = starts[vline + 1]
+            next_end = starts[vline + 2] - 1 if vline + 2 < len(starts) else len(line)
+            new_col = min(next_start + visual_col, next_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row, new_col)
+        elif row < doc.line_count - 1:
+            next_line = doc.lines[row + 1]
+            next_starts, _ = _word_wrap_boundaries(next_line, width)
+            first_end = next_starts[1] - 1 if len(next_starts) > 1 else len(next_line)
+            new_col = min(visual_col, first_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row + 1, new_col)
+
+    @kb.add("escape", filter=is_editor & no_float & editor_has_selection)
+    def _(event):
+        editor_area.buffer.exit_selection()
+
     # ── Style ────────────────────────────────────────────────────────
 
     style = PtStyle.from_dict({
@@ -3478,6 +3648,7 @@ def create_app(storage):
         "title": "#e0e0e0",
         "status": "#8a8a8a bg:#333333",
         "hint": "#777777",
+        "hint.sep": "#4a4a4a",
         "accent": "#e0af68",
         "input": "bg:#333333 #e0e0e0",
         "editor": "",
