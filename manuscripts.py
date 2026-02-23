@@ -2208,6 +2208,12 @@ class SpellCheckPanel:
             if self._list.items:
                 self._do_replace(self._list.items[self._list.selected_index][0])
 
+        @self._list._kb.add("a")
+        def _add_dict(event):
+            if self.occurrences:
+                word, _ = self.occurrences[self.current_idx]
+                asyncio.ensure_future(self._add_to_dict_async(word))
+
         def get_header():
             if not self.occurrences:
                 return [("class:hint", " Done — no more misspellings\n")]
@@ -2224,6 +2230,7 @@ class SpellCheckPanel:
             return [
                 ("class:accent bold", "  ret"), ("", "  Replace\n"),
                 ("class:accent bold", "    s"), ("", "  Skip\n"),
+                ("class:accent bold", "    a"), ("", "  Add to dict\n"),
                 ("class:accent bold", "  esc"), ("", "  Close\n"),
             ]
 
@@ -2231,7 +2238,7 @@ class SpellCheckPanel:
             Window(FormattedTextControl(get_header), height=1),
             self._list,
             Window(height=1),
-            Window(FormattedTextControl(get_hints), height=3),
+            Window(FormattedTextControl(get_hints), height=4),
         ], width=24, style="class:find-panel")
 
         self._update_list()
@@ -2298,6 +2305,28 @@ class SpellCheckPanel:
         self.current_idx = (self.current_idx + 1) % len(self.occurrences)
         self._update_list()
         self._goto_current()
+
+    async def _add_to_dict_async(self, word):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "aspell", "-a", "--lang=en_US",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.communicate(input=f"*{word}\n#\n".encode())
+        except Exception:
+            pass
+        word_lower = word.lower()
+        self.occurrences = [(w, p) for w, p in self.occurrences
+                            if w.lower() != word_lower]
+        if self.current_idx >= len(self.occurrences):
+            self.current_idx = max(0, len(self.occurrences) - 1)
+        self._update_list()
+        if self.occurrences:
+            self._goto_current()
+        else:
+            get_app().invalidate()
 
     def _close(self):
         self.state.show_spell_panel = False
