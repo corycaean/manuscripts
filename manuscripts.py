@@ -1275,6 +1275,7 @@ class AppState:
         self.notification = ""
         self.notification_task = None
         self.quit_pending = 0.0
+        self.quit_pending2 = 0.0
         self.escape_pending = 0.0
         self.mass_export_pending = 0.0
         self.showing_exports = False
@@ -2123,6 +2124,26 @@ class CommandPaletteDialog:
         return self.dialog
 
 
+class SpellCheckDialog:
+    def __init__(self, misspelled):
+        if not misspelled:
+            body = Label("  No misspellings found.")
+        else:
+            lines = "\n".join(f"  {w}" for w in sorted(set(misspelled)))
+            body = TextArea(text=lines, read_only=True, scrollbar=True,
+                            style="class:dialog.body")
+        ok_btn = Button("Close", handler=lambda: get_app().exit(result=True))
+        self.container = Dialog(
+            title="Spell Check",
+            body=body,
+            buttons=[ok_btn],
+            modal=True,
+        )
+
+    def __pt_container__(self):
+        return self.container
+
+
 class FindReplacePanel:
     """Non-modal side panel for find/replace with match cycling."""
 
@@ -2363,8 +2384,6 @@ def create_app(storage):
     hints_control = FormattedTextControl(_get_hints)
     def _get_shutdown_hint():
         now = time.monotonic()
-        if now - state.quit_pending < 2.0:
-            return [("class:accent bold", " (^q) press again to quit ")]
         if state.shutdown_pending and now - state.shutdown_pending < 2.0:
             return [("class:accent bold", " (^s) press again to shut down ")]
         return [("class:hint", " (^s) shut down ")]
@@ -2599,9 +2618,14 @@ def create_app(storage):
                          f" {state.current_project.name}")]
         return [("class:status", "")]
 
-    status_bar = Window(
-        FormattedTextControl(get_status_text), height=1, style="class:status",
-    )
+    def get_guide_hint():
+        return [("class:hint", " (^g) guide ")]
+
+    status_bar = VSplit([
+        Window(FormattedTextControl(get_status_text), height=1, style="class:status"),
+        Window(FormattedTextControl(get_guide_hint), height=1,
+               align=WindowAlign.RIGHT, style="class:status", dont_extend_width=True),
+    ])
 
     def get_keybindings_text():
         sections = [
@@ -3030,11 +3054,13 @@ def create_app(storage):
         if state.root_container.floats:
             return
         now = time.monotonic()
-        if now - state.quit_pending < 2.0:
+        if state.quit_pending2 > 0 and now - state.quit_pending2 < 3.0:
             event.app.exit()
+        elif state.quit_pending > 0 and now - state.quit_pending < 3.0:
+            state.quit_pending2 = now
         else:
             state.quit_pending = now
-            show_notification(state, "Press ^q again to quit.", duration=2.0)
+            state.quit_pending2 = 0.0
 
     # -- Projects screen --
     @kb.add("n", filter=projects_list_focused)
@@ -3392,6 +3418,23 @@ def create_app(storage):
                     except ValueError:
                         pass
 
+                async def cmd_spell_check():
+                    text = editor_area.buffer.text
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "aspell", "list",
+                            stdin=asyncio.subprocess.PIPE,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        stdout, _ = await proc.communicate(input=text.encode())
+                        words = [w for w in stdout.decode().splitlines() if w.strip()]
+                    except FileNotFoundError:
+                        show_notification(state, "aspell not found — install it to use spell check.")
+                        return
+                    dlg = SpellCheckDialog(words)
+                    await show_dialog_as_float(state, dlg)
+
                 cmds = [
                     ("Export", "Export document", cmd_export),
                     ("Find", "^F", cmd_find),
@@ -3403,6 +3446,7 @@ def create_app(storage):
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", cmd_sources),
+                    ("Spell check", "Check spelling", cmd_spell_check),
                 ]
             else:
                 cmds = [
