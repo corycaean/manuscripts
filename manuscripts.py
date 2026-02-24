@@ -2432,7 +2432,6 @@ class FindReplacePanel:
             get_app().layout.focus(self.editor_area)
 
         @search_kb.add("tab")
-        @search_kb.add("down")
         def _search_tab(event):
             get_app().layout.focus(self.replace_window)
 
@@ -2441,13 +2440,8 @@ class FindReplacePanel:
             self._replace_one()
 
         @replace_kb.add("tab")
-        @replace_kb.add("down")
         def _replace_tab(event):
             get_app().layout.focus(self.replace_all_window)
-
-        @replace_kb.add("up")
-        def _replace_up(event):
-            get_app().layout.focus(self.search_window)
 
         self.search_control = BufferControl(
             buffer=self.search_buf, key_bindings=search_kb,
@@ -2474,13 +2468,8 @@ class FindReplacePanel:
             self._replace_all()
 
         @btn_kb.add("tab")
-        @btn_kb.add("down")
         def _btn_tab(event):
             get_app().layout.focus(self.search_window)
-
-        @btn_kb.add("up")
-        def _btn_up(event):
-            get_app().layout.focus(self.replace_window)
 
         self.replace_all_control = FormattedTextControl(
             [("class:button", " Replace All ")],
