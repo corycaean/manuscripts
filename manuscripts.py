@@ -1465,21 +1465,41 @@ class InputDialog:
 
     def __init__(self, title="", label_text="", initial="", ok_text="OK"):
         self.future = asyncio.Future()
-        self.text_area = TextArea(
-            text=initial, multiline=False, width=D(preferred=40),
-        )
 
         def accept(_buf=None):
-            val = self.text_area.text.strip()
+            val = self.buf.text.strip()
             if not self.future.done():
                 self.future.set_result(val if val else None)
 
-        self.text_area.buffer.accept_handler = accept
+        self.buf = Buffer(
+            document=Document(initial, len(initial)),
+            multiline=False,
+            accept_handler=lambda _b: accept(),
+        )
+
+        input_kb = KeyBindings()
+
+        @input_kb.add("escape", eager=True)
+        def _escape(event):
+            self.cancel()
+
+        @input_kb.add("down")
+        def _down(event):
+            event.app.layout.focus_next()
+
+        @input_kb.add("up")
+        def _up(event):
+            event.app.layout.focus_previous()
+
+        input_window = Window(
+            content=BufferControl(buffer=self.buf, key_bindings=input_kb),
+            height=1, width=D(preferred=40), dont_extend_height=True,
+        )
         ok_btn = Button(text=ok_text, handler=accept)
         cancel_btn = Button(text="Cancel", handler=self.cancel)
         self.dialog = Dialog(
             title=title,
-            body=HSplit([Label(text=label_text), self.text_area]),
+            body=HSplit([Label(text=label_text), input_window]),
             buttons=[ok_btn, cancel_btn],
             modal=True,
         )
@@ -1707,6 +1727,20 @@ class SourceFormDialog:
             for field_key, label in SOURCE_FIELDS[stype]:
                 self.field_inputs[(stype, field_key)] = Buffer(multiline=False)
 
+        field_kb = KeyBindings()
+
+        @field_kb.add("escape", eager=True)
+        def _field_escape(event):
+            self.cancel()
+
+        @field_kb.add("down")
+        def _field_down(event):
+            event.app.layout.focus_next()
+
+        @field_kb.add("up")
+        def _field_up(event):
+            event.app.layout.focus_previous()
+
         self._field_containers = {}
         for stype in SOURCE_TYPES:
             rows = []
@@ -1718,7 +1752,7 @@ class SourceFormDialog:
                         width=22, height=1, dont_extend_height=True,
                     ),
                     Window(
-                        BufferControl(buffer=buf), height=1,
+                        BufferControl(buffer=buf, key_bindings=field_kb), height=1,
                         style="class:input", dont_extend_height=True,
                     ),
                 ], height=1))
@@ -1733,6 +1767,14 @@ class SourceFormDialog:
                     self._switch_type(st, event.app)
                 return handler
             type_kb.add(key)(_make_handler(stype))
+
+        @type_kb.add("escape", eager=True)
+        def _type_escape(event):
+            self.cancel()
+
+        @type_kb.add("down")
+        def _type_down(event):
+            event.app.layout.focus_next()
 
         self.type_control = FormattedTextControl(
             self._get_type_text, focusable=True, key_bindings=type_kb,
@@ -1964,12 +2006,9 @@ class BibImportDialog:
 
     def __init__(self):
         self.future = asyncio.Future()
-        self.text_area = TextArea(
-            text="", multiline=False, width=D(preferred=60),
-        )
 
         def do_import(_buf=None):
-            path_str = self.text_area.text.strip()
+            path_str = self.buf.text.strip()
             if not path_str:
                 return
             p = Path(path_str).expanduser()
@@ -1983,12 +2022,35 @@ class BibImportDialog:
             if sources and not self.future.done():
                 self.future.set_result(sources)
 
-        self.text_area.buffer.accept_handler = do_import
+        self.buf = Buffer(
+            document=Document("", 0),
+            multiline=False,
+            accept_handler=lambda _b: do_import(),
+        )
+
+        bib_kb = KeyBindings()
+
+        @bib_kb.add("escape", eager=True)
+        def _escape(event):
+            self.cancel()
+
+        @bib_kb.add("down")
+        def _down(event):
+            event.app.layout.focus_next()
+
+        @bib_kb.add("up")
+        def _up(event):
+            event.app.layout.focus_previous()
+
+        input_window = Window(
+            content=BufferControl(buffer=self.buf, key_bindings=bib_kb),
+            height=1, width=D(preferred=60), dont_extend_height=True,
+        )
         self.dialog = Dialog(
             title="Import .bib File",
             body=HSplit([
                 Label(text="Path to .bib file:"),
-                self.text_area,
+                input_window,
             ]),
             buttons=[
                 Button(text="Import", handler=do_import),
@@ -2370,6 +2432,7 @@ class FindReplacePanel:
             get_app().layout.focus(self.editor_area)
 
         @search_kb.add("tab")
+        @search_kb.add("down")
         def _search_tab(event):
             get_app().layout.focus(self.replace_window)
 
@@ -2378,8 +2441,13 @@ class FindReplacePanel:
             self._replace_one()
 
         @replace_kb.add("tab")
+        @replace_kb.add("down")
         def _replace_tab(event):
             get_app().layout.focus(self.replace_all_window)
+
+        @replace_kb.add("up")
+        def _replace_up(event):
+            get_app().layout.focus(self.search_window)
 
         self.search_control = BufferControl(
             buffer=self.search_buf, key_bindings=search_kb,
@@ -2406,8 +2474,13 @@ class FindReplacePanel:
             self._replace_all()
 
         @btn_kb.add("tab")
+        @btn_kb.add("down")
         def _btn_tab(event):
             get_app().layout.focus(self.search_window)
+
+        @btn_kb.add("up")
+        def _btn_up(event):
+            get_app().layout.focus(self.replace_window)
 
         self.replace_all_control = FormattedTextControl(
             [("class:button", " Replace All ")],
