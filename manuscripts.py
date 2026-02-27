@@ -3026,8 +3026,10 @@ def create_app(storage):
 
     projects_view = HSplit([
         VSplit([
-            Window(FormattedTextControl([("fg:#e0af68 bold", " manuscripts")]),
-                   height=1, dont_extend_height=True),
+            Window(FormattedTextControl([
+                ("fg:#e0af68 bold", " manuscripts"),
+                ("class:hint", "  ·  projects"),
+            ]), height=1, dont_extend_height=True),
             Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
         ]),
         Window(height=1, char="─", style="class:hint"),
