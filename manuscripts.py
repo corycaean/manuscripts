@@ -2885,24 +2885,21 @@ def create_app(storage):
             async def _show():
                 try:
                     printers = _detect_printers()
-                    async def _submit():
+                    cmds = [("Submit to teacher", "wireless", "submit")]
+                    if printers:
+                        cmds.append(("Print", "send to printer", "print"))
+                    cmds.append(("Open", "view file", "open"))
+                    dlg = CommandPaletteDialog(cmds)
+                    choice = await show_dialog_as_float(state, dlg)
+                    if choice == "submit":
                         await _do_submit(path)
-                    async def _do_print():
-                        dlg = PrinterPickerDialog(printers, path)
-                        result = await show_dialog_as_float(state, dlg)
+                    elif choice == "print":
+                        dlg2 = PrinterPickerDialog(printers, path)
+                        result = await show_dialog_as_float(state, dlg2)
                         if result:
                             show_notification(state, f"Sent to {result}.")
-                    cmds = [("Submit to teacher", "wireless", _submit)]
-                    if printers:
-                        cmds.append(("Print", "send to printer", _do_print))
-                    cmds.append(("Open", "view file", _open_in_os))
-                    dlg = CommandPaletteDialog(cmds)
-                    action = await show_dialog_as_float(state, dlg)
-                    if action is not None:
-                        if asyncio.iscoroutinefunction(action):
-                            await action()
-                        elif callable(action):
-                            action()
+                    elif choice == "open":
+                        _open_in_os()
                 except Exception as exc:
                     show_notification(state, f"Error: {type(exc).__name__}: {str(exc)[:50]}")
             asyncio.ensure_future(_show())
