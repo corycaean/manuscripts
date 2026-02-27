@@ -18,8 +18,7 @@ jobs:
       - name: Build binary
         run: |
           cd manuscripts-share
-          pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow \
-            pyobjc-framework-Cocoa pyobjc-framework-AppKit
+          pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pyobjc
           python make_icons.py
           pyinstaller --onefile --windowed \
             --name manuscripts-share \

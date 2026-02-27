@@ -20,8 +20,7 @@ echo "Building manuscripts-share v${VERSION} for macOS..."
 # Use a build venv to avoid Homebrew's externally-managed-environment restriction
 python3 -m venv "${SCRIPT_DIR}/.build-venv"
 source "${SCRIPT_DIR}/.build-venv/bin/activate"
-pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow \
-    pyobjc-framework-Cocoa pyobjc-framework-AppKit
+pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pyobjc
 
 python3 make_icons.py
 
