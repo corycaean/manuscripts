@@ -1304,8 +1304,8 @@ class SelectableList:
         for i, (_, label) in enumerate(self.items):
             if "\t" in label:
                 left, right = label.split("\t", 1)
-                padding = max(1, cols - len(left) - len(right) - 2)
-                label = left + " " * padding + right
+                padding = max(1, cols - len(left) - len(right) - 3)
+                label = left + " " * padding + right + " "
             if i == self.selected_index:
                 result.append(("[SetCursorPosition]", ""))
                 result.append(("class:select-list.selected", f"  {label}\n"))
@@ -2836,7 +2836,7 @@ def create_app(storage):
                         "%B %-d, %Y")
                 except (ValueError, OSError):
                     mod = ""
-                items.append((str(f), f"{f.name}\t{mod}"))
+                items.append((str(f), f"  {f.name}\t{mod}"))
             export_list.set_items(items)
 
     project_search.buffer.on_text_changed += lambda buf: refresh_projects(buf.text)
