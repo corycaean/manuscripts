@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-manuscripts-share — receives PDF submissions from students over LAN.
+manuscripts-share — receives PDF submissions from peers over LAN.
 
 Usage:
-    python teacher.py
+    python share.py
 
 Opens a browser dashboard at http://localhost:{port}/ and advertises itself
 on the local network as a submission target for manuscripts.py.
@@ -179,7 +179,7 @@ HTML_PAGE = """\
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-_CONFIG_FILE = Path.home() / ".config" / "manuscripts" / "teacher.json"
+_CONFIG_FILE = Path.home() / ".config" / "manuscripts" / "share.json"
 
 
 def _load_config() -> dict:
@@ -199,7 +199,7 @@ def _get_teacher_name() -> str:
     if cfg.get("name"):
         return cfg["name"]
     try:
-        name = input("Your name (shown to students): ").strip()
+        name = input("Your name (shown to peers): ").strip()
     except (EOFError, KeyboardInterrupt):
         name = ""
     if not name:
