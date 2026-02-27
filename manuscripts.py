@@ -2798,6 +2798,12 @@ def create_app(storage):
 
     async def _do_submit(path):
         """Discover a teacher server and POST the given PDF."""
+        # DEBUG
+        try:
+            Path("/tmp/breezy.log").open("a").write("_do_submit entered\n")
+        except Exception:
+            pass
+        show_notification(state, "DBG: in submit", duration=60.0)
         # Student name: frontmatter author > saved config > prompt
         student_name = ""
         if state.current_project:
@@ -2892,6 +2898,11 @@ def create_app(storage):
                     dlg = CommandPaletteDialog(cmds)
                     choice = await show_dialog_as_float(state, dlg)
                     if choice == "submit":
+                        try:
+                            Path("/tmp/breezy.log").open("a").write(f"choice==submit, path={path}\n")
+                        except Exception:
+                            pass
+                        show_notification(state, "DBG: choice submit", duration=60.0)
                         await _do_submit(path)
                     elif choice == "print":
                         dlg2 = PrinterPickerDialog(printers, path)
@@ -2901,6 +2912,10 @@ def create_app(storage):
                     elif choice == "open":
                         _open_in_os()
                 except Exception as exc:
+                    try:
+                        Path("/tmp/breezy.log").open("a").write(f"_show exc: {type(exc).__name__}: {exc}\n")
+                    except Exception:
+                        pass
                     show_notification(state, f"Error: {type(exc).__name__}: {str(exc)[:50]}")
             asyncio.ensure_future(_show())
         else:
