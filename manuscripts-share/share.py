@@ -42,8 +42,7 @@ HTML_PAGE = """\
       --text:     #e0e0e0;
       --accent:   #e0af68;
       --blue:     #7aa2f7;
-      --row-bg:   #333333;
-      --dim:      #8a8a8a;
+      --dim:      #777777;
       --border:   #444444;
     }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -52,36 +51,31 @@ HTML_PAGE = """\
       color: var(--text);
       font-family: 'Courier New', Courier, monospace;
       font-size: 14px;
-      padding: 2rem 2.5rem;
+      padding: 2rem 2.5rem 4rem 2.5rem;
     }}
     header {{
       border-bottom: 1px solid var(--border);
-      padding-bottom: 1rem;
+      padding-bottom: 0.6rem;
       margin-bottom: 1.5rem;
       display: flex;
       align-items: baseline;
-      gap: 1.5rem;
     }}
     h1 {{
       color: var(--accent);
       font-size: 1.5rem;
       letter-spacing: 0.05em;
+      font-weight: bold;
     }}
-    .meta {{
+    .header-sep {{
       color: var(--dim);
-      font-size: 0.85rem;
-    }}
-    .meta strong {{
-      color: var(--text);
+      margin: 0 0.5rem;
     }}
     #status {{
-      margin-bottom: 1.5rem;
       color: var(--dim);
       font-size: 0.85rem;
-      min-height: 1.2em;
     }}
     #status.active {{
-      color: var(--accent);
+      color: var(--text);
     }}
     table {{
       width: 100%;
@@ -105,21 +99,31 @@ HTML_PAGE = """\
     }}
     .col-time  {{ color: var(--dim); width: 5.5rem; white-space: nowrap; }}
     .col-name  {{ color: var(--blue); width: 16rem; }}
-    .col-title {{ }}
     #empty {{
       color: var(--dim);
       padding: 2rem 0.75rem;
       font-size: 0.9rem;
+    }}
+    footer {{
+      position: fixed;
+      bottom: 1.5rem;
+      left: 2.5rem;
+      display: flex;
+      gap: 1.5rem;
+      color: var(--dim);
+      font-size: 0.8rem;
+    }}
+    footer strong {{
+      color: var(--text);
     }}
   </style>
 </head>
 <body>
   <header>
     <h1>manuscripts</h1>
-    <span class="meta">teacher: <strong>{teacher_name}</strong></span>
-    <span class="meta" id="conn">connections: <strong id="conn-count">0</strong></span>
+    <span class="header-sep">·</span>
+    <span id="status">waiting for submissions&hellip;</span>
   </header>
-  <div id="status">Waiting for submissions&hellip;</div>
   <table id="table" style="display:none">
     <thead>
       <tr>
@@ -131,6 +135,11 @@ HTML_PAGE = """\
     <tbody id="tbody"></tbody>
   </table>
   <div id="empty">No submissions yet.</div>
+
+  <footer>
+    <span>teacher: <strong>{teacher_name}</strong></span>
+    <span>connections: <strong id="conn-count">0</strong></span>
+  </footer>
 
   <script>
     const tbody  = document.getElementById('tbody');
@@ -160,7 +169,7 @@ HTML_PAGE = """\
         tbody.prepend(tr);
         status.textContent = d.student + ' submitted \u201c' + d.title + '\u201d';
         status.className = 'active';
-        setTimeout(() => {{ status.textContent = 'Waiting for submissions\u2026'; status.className = ''; }}, 4000);
+        setTimeout(() => {{ status.textContent = 'waiting for submissions\u2026'; status.className = ''; }}, 4000);
       }});
 
       es.addEventListener('count', e => {{
