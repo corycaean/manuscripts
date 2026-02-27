@@ -2958,8 +2958,14 @@ def create_app(storage):
     exports_hints_window = Window(content=exports_hints_control, height=1)
 
     exports_view = HSplit([
-        Window(FormattedTextControl([("class:title", " Exports")]),
-               height=1, dont_extend_height=True),
+        VSplit([
+            Window(FormattedTextControl([
+                ("fg:#e0af68 bold", " manuscripts"),
+                ("class:hint", "  ·  exports"),
+            ]), height=1, dont_extend_height=True),
+            Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
+        ]),
+        Window(height=1, char="─", style="class:hint"),
         export_list,
         exports_hints_window,
     ])
