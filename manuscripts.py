@@ -2864,6 +2864,8 @@ def create_app(storage):
                 )
         except ImportError:
             show_notification(state, "Run: pip install aiohttp zeroconf")
+        except OSError:
+            show_notification(state, f"Cannot reach {teacher_name}. Is teacher.py running?")
         except Exception as exc:
             show_notification(state, f"Submission failed: {str(exc)[:60]}")
 
