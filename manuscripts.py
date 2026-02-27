@@ -1296,8 +1296,16 @@ class SelectableList:
     def _get_text(self):
         if not self.items:
             return [("class:select-list.empty", "  (empty)\n")]
+        try:
+            cols = get_app().output.get_size().columns
+        except Exception:
+            cols = 80
         result = []
         for i, (_, label) in enumerate(self.items):
+            if "\t" in label:
+                left, right = label.split("\t", 1)
+                padding = max(1, cols - len(left) - len(right) - 2)
+                label = left + " " * padding + right
             if i == self.selected_index:
                 result.append(("[SetCursorPosition]", ""))
                 result.append(("class:select-list.selected", f"  {label}\n"))
@@ -1676,6 +1684,62 @@ class PrinterPickerDialog:
             self.future.set_result(printer)
 
     def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class AlertDialog:
+    """Simple one-button notification dialog."""
+
+    def __init__(self, message: str):
+        self.future: asyncio.Future = asyncio.Future()
+
+        def _ok():
+            if not self.future.done():
+                self.future.set_result(None)
+
+        self.dialog = Dialog(
+            title="manuscripts",
+            body=Window(
+                FormattedTextControl([("", f"  {message}")]),
+                height=1, dont_extend_height=True,
+            ),
+            buttons=[Button(text="OK", handler=_ok)],
+            modal=True,
+            width=D(preferred=52, max=64),
+        )
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class SearchingDialog:
+    """Non-blocking indicator shown while discovering teachers. Cancellable."""
+
+    def __init__(self, message: str):
+        self.future: asyncio.Future = asyncio.Future()
+        self.cancelled = False
+
+        def _cancel():
+            self.cancelled = True
+            if not self.future.done():
+                self.future.set_result(None)
+
+        self.dialog = Dialog(
+            title="manuscripts",
+            body=Window(
+                FormattedTextControl([("", f"  {message}")]),
+                height=1, dont_extend_height=True,
+            ),
+            buttons=[Button(text="Cancel", handler=_cancel)],
+            modal=True,
+            width=D(preferred=52, max=64),
+        )
+
+    def close(self):
         if not self.future.done():
             self.future.set_result(None)
 
@@ -2710,6 +2774,10 @@ def create_app(storage):
     )
     project_list = SelectableList()
     export_list = SelectableList()
+    export_search = TextArea(
+        multiline=False, prompt=" Search: ", height=1,
+        style="class:input",
+    )
     def _get_hints():
         sep = ("class:hint.sep", " · ")
         return [
@@ -2740,19 +2808,21 @@ def create_app(storage):
             items = []
             for p in pinned + unpinned:
                 try:
-                    mod = datetime.fromisoformat(p.modified).strftime("%b %d, %Y")
+                    mod = datetime.fromisoformat(p.modified).strftime("%B %-d, %Y")
                 except (ValueError, TypeError):
                     mod = ""
                 prefix = "* " if p.name in state.pinned_projects else "  "
-                items.append((p.id, f"{prefix}{p.name}  ({mod})"))
+                items.append((p.id, f"{prefix}{p.name}\t{mod}"))
             project_list.set_items(items)
 
-    def refresh_exports():
+    def refresh_exports(query=""):
         export_dir = state.storage.exports_dir
         files = []
         for ext in ("*.pdf", "*.docx", "*.md"):
             files.extend(export_dir.glob(ext))
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        if query:
+            files = [f for f in files if query.lower() in f.name.lower()]
         state.export_paths = files
         if not files:
             export_list.set_items([("__empty__", "No exports yet.")])
@@ -2761,15 +2831,16 @@ def create_app(storage):
             for f in files:
                 try:
                     mod = datetime.fromtimestamp(f.stat().st_mtime).strftime(
-                        "%b %d, %Y %H:%M")
+                        "%B %-d, %Y")
                 except (ValueError, OSError):
                     mod = ""
-                size_kb = f.stat().st_size // 1024
-                items.append((str(f), f"{f.name}  ({mod}, {size_kb} KB)"))
+                items.append((str(f), f"{f.name}\t{mod}"))
             export_list.set_items(items)
 
     project_search.buffer.on_text_changed += lambda buf: refresh_projects(buf.text)
+    export_search.buffer.on_text_changed += lambda buf: refresh_exports(buf.text)
     refresh_projects()
+    refresh_exports()
 
     def open_project(pid):
         if pid == "__empty__":
@@ -2814,7 +2885,6 @@ def create_app(storage):
             )
             student_name = await show_dialog_as_float(state, dlg)
             if not student_name:
-                show_notification(state, "Submission cancelled.")
                 return
             state.student_name = student_name
             cfg = _load_config()
@@ -2822,15 +2892,18 @@ def create_app(storage):
             _save_config(cfg)
 
         # Discover teacher(s) on LAN
-        show_notification(state, "Looking for teacher\u2026", duration=5.0)
+        searching = SearchingDialog("Looking for teacher on network\u2026")
+        asyncio.ensure_future(show_dialog_as_float(state, searching))
         teachers = await _discover_teachers(timeout=3.0)
+        searching.close()
+        if searching.cancelled:
+            return
         if not teachers:
-            show_notification(state, "No teacher found on network.")
+            await show_dialog_as_float(state, AlertDialog("No teacher found on network."))
             return
         dlg = TeacherPickerDialog(teachers)
         choice = await show_dialog_as_float(state, dlg)
         if not choice:
-            show_notification(state, "Submission cancelled.")
             return
         teacher_name, host, port, requires_auth = choice
 
@@ -2840,11 +2913,11 @@ def create_app(storage):
             dlg = InputDialog("Password", f"Enter password for {teacher_name}:", "")
             password = await show_dialog_as_float(state, dlg)
             if not password:
-                show_notification(state, "Submission cancelled.")
                 return
 
         # POST the PDF to the teacher's server
-        show_notification(state, f"Sending to {teacher_name}\u2026", duration=10.0)
+        sending = SearchingDialog(f"Sending to {teacher_name}\u2026")
+        asyncio.ensure_future(show_dialog_as_float(state, sending))
         doc_title = path.stem
         try:
             import aiohttp
@@ -2863,7 +2936,7 @@ def create_app(storage):
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status == 401:
-                        # mDNS auth flag was stale or password was wrong — re-prompt
+                        sending.close()
                         dlg = InputDialog(
                             "Password",
                             f"Password required by {teacher_name}:",
@@ -2871,8 +2944,9 @@ def create_app(storage):
                         )
                         password = await show_dialog_as_float(state, dlg)
                         if not password:
-                            show_notification(state, "Submission cancelled.")
                             return
+                        sending = SearchingDialog(f"Sending to {teacher_name}\u2026")
+                        asyncio.ensure_future(show_dialog_as_float(state, sending))
                         data2 = aiohttp.FormData()
                         data2.add_field("student", student_name)
                         data2.add_field("title", doc_title)
@@ -2889,19 +2963,26 @@ def create_app(storage):
                             result = await resp2.json()
                     else:
                         result = await resp.json()
+            sending.close()
             if result.get("ok"):
-                show_notification(state, f"Submitted to {teacher_name}.")
+                await show_dialog_as_float(state, AlertDialog(f"Submitted to {teacher_name}."))
             else:
-                show_notification(
-                    state,
-                    f"Submission failed: {result.get('error', 'unknown')}",
-                )
+                await show_dialog_as_float(state, AlertDialog(
+                    f"Submission failed: {result.get('error', 'unknown')}"
+                ))
         except ImportError:
-            show_notification(state, "Run: pip install aiohttp zeroconf")
+            sending.close()
+            await show_dialog_as_float(state, AlertDialog("Run: pip install aiohttp zeroconf"))
         except OSError:
-            show_notification(state, f"Cannot reach {teacher_name}. Is teacher.py running?")
+            sending.close()
+            await show_dialog_as_float(state, AlertDialog(
+                f"Cannot reach {teacher_name}. Is share.py running?"
+            ))
         except Exception as exc:
-            show_notification(state, f"Submission failed: {str(exc)[:60]}")
+            sending.close()
+            await show_dialog_as_float(state, AlertDialog(
+                f"Submission failed: {str(exc)[:60]}"
+            ))
 
     def open_export(path_str):
         if path_str == "__empty__":
@@ -2954,7 +3035,7 @@ def create_app(storage):
     ])
 
     exports_hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (m) manuscripts  (d) delete")])
+        lambda: [("class:hint", " (/) search  ·  (m) manuscripts  (d) delete  (s) submit")])
     exports_hints_window = Window(content=exports_hints_control, height=1)
 
     exports_view = HSplit([
@@ -2967,6 +3048,7 @@ def create_app(storage):
         ]),
         Window(height=1, char="─", style="class:hint"),
         export_list,
+        export_search,
         exports_hints_window,
     ])
 
@@ -2982,11 +3064,6 @@ def create_app(storage):
 
     projects_screen = HSplit([
         DynamicContainer(get_projects_screen),
-        ConditionalContainer(
-            Window(FormattedTextControl(get_projects_status_text),
-                   height=1, style="class:status"),
-            filter=Condition(lambda: state.showing_exports),
-        ),
     ])
 
     # ── Editor screen widgets ────────────────────────────────────────
@@ -3679,7 +3756,10 @@ def create_app(storage):
 
     @kb.add("/", filter=projects_list_focused)
     def _(event):
-        event.app.layout.focus(project_search.window)
+        if state.showing_exports:
+            event.app.layout.focus(export_search.window)
+        else:
+            event.app.layout.focus(project_search.window)
 
     search_focused = Condition(
         lambda: state.screen == "projects"
