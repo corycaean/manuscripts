@@ -3521,6 +3521,7 @@ def create_app(storage):
 
     @kb.add("s", filter=projects_list_focused)
     def _(event):
+        show_notification(state, "[debug] s handler fired", duration=30.0)
         if not state.showing_exports:
             show_notification(state, "[debug] not in exports view")
             return
