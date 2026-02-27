@@ -184,11 +184,12 @@ HTML_PAGE = """\
     }}
 
     function openFile(btn, path) {{
+      console.log('[open] path:', path);
       btn.disabled = true;
       fetch('/open?path=' + encodeURIComponent(path))
-        .then(r => r.json())
-        .then(d => {{ if (!d.ok) btn.disabled = false; }})
-        .catch(() => {{ btn.disabled = false; }});
+        .then(r => {{ console.log('[open] status:', r.status); return r.json(); }})
+        .then(d => {{ console.log('[open] result:', JSON.stringify(d)); if (!d.ok) btn.disabled = false; }})
+        .catch(e => {{ console.log('[open] error:', e); btn.disabled = false; }});
     }}
 
     function esc(s) {{
@@ -247,10 +248,19 @@ def _get_local_ip() -> str:
         return "127.0.0.1"
 
 
+_DEFAULT_PORT = 8765
+
+
 def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+    """Try the default port first, fall back to a random free one."""
+    for port in (_DEFAULT_PORT, 0):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("", port))
+                return s.getsockname()[1]
+            except OSError:
+                continue
+    return _DEFAULT_PORT  # unreachable
 
 
 # ── SSE manager ──────────────────────────────────────────────────────────────
