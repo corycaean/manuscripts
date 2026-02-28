@@ -120,7 +120,7 @@ This will open a pop-up from which students can fuzzy search their projects' sou
 <img width="800" height="480" alt="manuscripts-20260228-142158" src="https://github.com/user-attachments/assets/9777e23c-ed0c-4c74-8119-f1541ead27ae" />
 
 #### Insert bibliography (palette only)
-This option, which can be a book from the palette, inserts a bibliography of all of the projects's sources.
+This option, which can be triggered from the palette, inserts a bibliography of all of the projects's sources.
 
 #### Insert frontmatter (palette only)
 This will insert at the top of the document the frontmatter relevant to the export function. I reckon title, author, instructor, and date are pretty self-explanatory. Style accepts one of two case sensitive inputs: "chicago" and "mla". Spacing, likewise, accepts "single" or "double". You can also add your own frontmatter elements, the most relevant of which might be "bibliography", "csl", and "tags". Now to talk about the final feature in this section.
