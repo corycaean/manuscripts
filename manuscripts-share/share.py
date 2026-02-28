@@ -37,6 +37,11 @@ HTML_PAGE = """\
   <meta charset="utf-8">
   <title>manuscripts · {teacher_name}</title>
   <style>
+    @font-face {{
+      font-family: 'JetBrains Mono';
+      src: url('/font/JetBrainsMono-Regular.ttf') format('truetype');
+      font-weight: 400;
+    }}
     :root {{
       --bg:       #2a2a2a;
       --text:     #e0e0e0;
@@ -49,7 +54,7 @@ HTML_PAGE = """\
     body {{
       background: var(--bg);
       color: var(--text);
-      font-family: 'Courier New', Courier, monospace;
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
       font-size: 14px;
       padding: 2rem 2.5rem 4rem 2.5rem;
     }}
@@ -122,7 +127,7 @@ HTML_PAGE = """\
   <header>
     <h1>manuscripts</h1>
     <span class="header-sep">·</span>
-    <span id="status">waiting for submissions&hellip;</span>
+    <span id="status">submissions</span>
   </header>
   <table id="table" style="display:none">
     <thead>
@@ -169,7 +174,7 @@ HTML_PAGE = """\
         tbody.prepend(tr);
         status.textContent = d.student + ' submitted \u201c' + d.title + '\u201d';
         status.className = 'active';
-        setTimeout(() => {{ status.textContent = 'waiting for submissions\u2026'; status.className = ''; }}, 4000);
+        setTimeout(() => {{ status.textContent = 'submissions'; status.className = ''; }}, 4000);
       }});
 
       es.addEventListener('count', e => {{
@@ -332,20 +337,36 @@ def _make_icon_image() -> Image.Image:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Subtle rounded square outline
+    # Subtle rounded square outline — black so macOS template rendering works
     draw.rounded_rectangle([4, 4, size - 4, size - 4], radius=14,
-                           outline=(255, 255, 255, 60), width=3)
+                           outline=(0, 0, 0, 60), width=3)
 
-    # Light weight text
+    # Light weight text — black for template image (macOS inverts per appearance)
     font = _load_font(80, weight="Light")
     text = "m."
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (size - tw) / 2 - bbox[0]
     y = (size - th) / 2 - bbox[1]
-    draw.text((x, y), text, font=font, fill="#FFFFFF")
+    draw.text((x, y), text, font=font, fill="#000000")
 
     return img
+
+
+def _setup_tray(icon: "pystray.Icon") -> None:
+    """Mark the menu-bar icon as a macOS template image.
+
+    Template images are monochrome+alpha; macOS renders them white in dark mode
+    and dark in light mode automatically, so we get correct appearance in both.
+    """
+    if sys.platform == "darwin":
+        try:
+            ns_image = icon._status_item.button().image()
+            if ns_image is not None:
+                ns_image.setTemplate_(True)
+        except Exception:
+            pass
+    icon.visible = True
 
 
 # ── Global server state (shared across threads) ───────────────────────────────
@@ -516,6 +537,22 @@ async def handle_index(request: web.Request) -> web.Response:
     return web.Response(text=request.app["html"], content_type="text/html")
 
 
+async def handle_font(request: web.Request) -> web.Response:
+    """Serve the JetBrains Mono font for the dashboard."""
+    font_name = "JetBrainsMono-Regular.ttf"
+    candidates = [
+        *(
+            [Path(sys._MEIPASS) / font_name]
+            if hasattr(sys, "_MEIPASS") else []
+        ),
+        Path(__file__).parent / font_name,
+    ]
+    for p in candidates:
+        if p.exists():
+            return web.FileResponse(p, headers={"Cache-Control": "max-age=86400"})
+    return web.Response(status=404)
+
+
 async def handle_events(request: web.Request) -> web.StreamResponse:
     sse: SSEManager = request.app["sse"]
     q = sse.connect()
@@ -642,6 +679,7 @@ async def run_server(
     app.router.add_get("/", handle_index)
     app.router.add_get("/events", handle_events)
     app.router.add_post("/submit", handle_submit)
+    app.router.add_get("/font/JetBrainsMono-Regular.ttf", handle_font)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port).start()
@@ -707,7 +745,7 @@ def main() -> None:
         "manuscripts-share",
         menu=_make_menu(),
     )
-    _tray_icon.run()
+    _tray_icon.run(_setup_tray)
 
 
 if __name__ == "__main__":

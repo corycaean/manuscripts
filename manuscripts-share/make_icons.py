@@ -22,9 +22,9 @@ def make_icon_image(size: int = 1024) -> Image.Image:
 
     radius = int(size * 0.165)
     try:
-        draw.rounded_rectangle([0, 0, size, size], radius=radius, fill="#4A7FA5")
+        draw.rounded_rectangle([0, 0, size, size], radius=radius, fill="#2a2a2a")
     except AttributeError:
-        draw.rectangle([0, 0, size, size], fill="#4A7FA5")
+        draw.rectangle([0, 0, size, size], fill="#2a2a2a")
 
     font_path = SCRIPT_DIR / "JetBrainsMono-Regular.ttf"
     font_size = int(size * 0.5)
@@ -38,7 +38,7 @@ def make_icon_image(size: int = 1024) -> Image.Image:
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (size - tw) / 2 - bbox[0]
     y = (size - th) / 2 - bbox[1]
-    draw.text((x, y), text, font=font, fill="#FFFFFF")
+    draw.text((x, y), text, font=font, fill="#e0af68")
 
     return img
 
