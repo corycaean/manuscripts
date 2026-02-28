@@ -175,6 +175,7 @@ This feature uses Pandoc and LibreOffice in the background to produce a .pdf for
 | Key      | Action                               |
 | -------- | ------------------------------------ |
 | Ctrl+B   | Bold                                 |
+| Ctrl+Down | Go to bottom of document            |
 | Ctrl+F   | Find/Replace                         |
 | Ctrl+G   | Toggle keybindings panel             |
 | Ctrl+I   | Italic                               |
@@ -183,5 +184,6 @@ This feature uses Pandoc and LibreOffice in the background to produce a .pdf for
 | Ctrl+P   | Command palette                      |
 | Ctrl+R   | Insert citation                      |
 | Ctrl+S   | Save                                 |
+| Ctrl+Up  | Go to top of document                |
 | Ctrl+W   | Toggle word/paragraph count          |
 | Esc (x2) | Return to file browser               |
