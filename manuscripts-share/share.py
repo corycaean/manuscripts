@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -331,42 +332,56 @@ def _load_font(size: int, weight: str = "Light") -> "ImageFont.FreeTypeFont | Im
     return ImageFont.load_default()
 
 
+def _is_dark_mode() -> bool:
+    """Return True when macOS is in dark mode."""
+    if sys.platform != "darwin":
+        return True  # non-Mac: default to white icon
+    try:
+        result = subprocess.run(
+            ["defaults", "read", "-g", "AppleInterfaceStyle"],
+            capture_output=True, text=True, timeout=2,
+        )
+        return result.stdout.strip().lower() == "dark"
+    except Exception:
+        return False
+
+
 def _make_icon_image() -> Image.Image:
-    from PIL import ImageFont
+    dark = _is_dark_mode()
+    fill = "#FFFFFF" if dark else "#000000"
+    outline = (255, 255, 255, 60) if dark else (0, 0, 0, 60)
+
     size = 128
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-
-    # Subtle rounded square outline — black so macOS template rendering works
     draw.rounded_rectangle([4, 4, size - 4, size - 4], radius=14,
-                           outline=(0, 0, 0, 60), width=3)
-
-    # Light weight text — black for template image (macOS inverts per appearance)
+                           outline=outline, width=3)
     font = _load_font(80, weight="Light")
     text = "m."
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (size - tw) / 2 - bbox[0]
     y = (size - th) / 2 - bbox[1]
-    draw.text((x, y), text, font=font, fill="#000000")
-
+    draw.text((x, y), text, font=font, fill=fill)
     return img
 
 
-def _setup_tray(icon: "pystray.Icon") -> None:
-    """Mark the menu-bar icon as a macOS template image.
+def _watch_appearance() -> None:
+    """Poll for macOS appearance changes and redraw the tray icon."""
+    current = _is_dark_mode()
+    while True:
+        time.sleep(3)
+        new = _is_dark_mode()
+        if new != current:
+            current = new
+            if _tray_icon is not None:
+                _tray_icon.icon = _make_icon_image()
 
-    Template images are monochrome+alpha; macOS renders them white in dark mode
-    and dark in light mode automatically, so we get correct appearance in both.
-    """
-    if sys.platform == "darwin":
-        try:
-            ns_image = icon._status_item.button().image()
-            if ns_image is not None:
-                ns_image.setTemplate_(True)
-        except Exception:
-            pass
+
+def _setup_tray(icon: "pystray.Icon") -> None:
     icon.visible = True
+    if sys.platform == "darwin":
+        threading.Thread(target=_watch_appearance, daemon=True).start()
 
 
 # ── Global server state (shared across threads) ───────────────────────────────
