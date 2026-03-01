@@ -1,5 +1,3 @@
-README UNDER CONSTRUCTION
-
 # Manuscripts—a writing appliance for students
 
 ## About
@@ -13,33 +11,36 @@ Thus, Manuscripts was born. Designed to facilitate the transmission of the skill
 
 ## Dependencies
 
-- Python 3.9+
-- prompt_toolkit
-- libreoffice
+### System packages
 - pandoc
-- cage
-- foot
-- cups
-- cups-client
-- lpr
-- python
+- libreoffice
+- cups, cups-client
+- cage, foot (Wayland compositor and terminal)
+- aspell
 - fonts-jetbrains-mono
 - ttf-mscorefonts-installer
+
+### Python (3.9+)
+- prompt_toolkit
+- pygments
+- aiohttp
+- zeroconf
 
 ## First-time use
 
 ```bash
 git clone https://github.com/charleskcisco/manuscripts.git
-chmod +x setup.sh run.sh
-./setup.sh     # creates venv, installs prompt_toolkit and other dependencies
-./run.sh       # launches manuscripts
+chmod +x app-setup.sh device-setup.sh run.sh
+./app-setup.sh     # installs system packages, creates venv, installs Python dependencies
+./device-setup.sh  # configures auto-login, start script, and terminal settings
+./run.sh           # launches manuscripts
 ```
 
 ## Specifics
 Manuscripts has a few views, each of which offers distinct features.
 
 - Manuscripts opens into the Projects view, which contains a searchable list of all projects. From there, you can either perform various operations on your projects (rename, pin to the top of the list, etc, on which more below), open a project in the editor view, or share exported project .pdf, .docx, or .md files (again, on which more below).
-- Once you enter the Editor view, you can edit documents using the ever-flexible the markdown syntax. You may also use ctrl+p to summon a command palette, from which you can access a host of features.
+- Once you enter the Editor view, you can edit documents using the ever-flexible markdown syntax. You may also use ctrl+p to summon a command palette, from which you can access a host of features.
 - Finally, in the Exports view, you may view projects you have exported and either print them or share them via a companion app running on their (or your instructor's or peer's) PC.
 
 Let me talk about these surfaces and their features in more detail.
@@ -53,7 +54,7 @@ The Projects view offers a list of *projects*, which are JSON files that contain
 Most of the shortcuts on the projects view are self-explanatory, so I'm just going to run through the few that I think need a little bit of explanation in the order in which they appear from top to bottom and left to right.
 
 #### Shut down (ctrl+s)
-Manuscripts is designed to be the writerdeck OS, if you want to think about it with that metaphor in mind. You might spend all of your time with this device in this app. For simplicity's sake, I wanted you to be able to shut down without exiting to CLI, so I set up a double press of ctrl+s to do the job. (*N*.*b*., this only works if you have auto-login set up on your device, because all it does is run 'sudo shutdown now'. 
+Manuscripts is designed to be the writerdeck OS, if you want to think about it with that metaphor in mind. You might spend all of your time with this device in this app. For simplicity's sake, I wanted you to be able to shut down without exiting to CLI, so I set up a double press of ctrl+s to do the job. (*N*.*b*., this only works if you have auto-login set up on your device, because all it does is run 'sudo shutdown now'.)
 
 #### Search
 At first, this isn't useful, but a fuzzy search that allows you to find old projects seems to me an essential addition. If you use Manuscripts over a number of years and classes, this becomes invaluable.
@@ -87,7 +88,7 @@ That's everything that's standard. Now moving on to some relatively specific fea
 #### Keybindings guide (ctrl+g)
 This opens a panel on the right that serves as a guide for the app keybindings. It can stay open as you edit as a reference if needed.
 
-<img width="800" height="480" alt="manuscripts-20260228-142109" src="https://github.com/user-attachments/assets/d6225041-0613-47a3-824c-fdf2c5cd5394" />****
+<img width="800" height="480" alt="manuscripts-20260228-142109" src="https://github.com/user-attachments/assets/d6225041-0613-47a3-824c-fdf2c5cd5394" />
 
 #### Invoke command palette
 The most powerful feature of the Editor view is the command palette, pictured below:
@@ -118,7 +119,7 @@ This will insert at the top of the document the frontmatter relevant to the expo
 ##### Example
 
 ```yaml
-—
+---
 title: "My Essay"
 author: "First Last"
 instructor: "Prof. Name"
@@ -126,8 +127,8 @@ date: "2026-02-13"
 spacing: double
 style: chicago
 bibliography: /home/username/documents/sources/library.bib
-csl: /home/username/documents/sources/chicago.csl 
-—
+csl: /home/username/documents/sources/chicago.csl
+---
 ```
 
 - **spacing**: `single`, `double`
@@ -175,33 +176,33 @@ Students may also print to network printers from the export screen
 
 #### Projects
 
-| Key | Action              |
-| — | ——————- |
-| n   | New entry           |
-| r   | Rename entry        |
-| d   | Delete entry        |
-| c   | Duplicate entry     |
-| e   | Toggle exports view |
-| /   | Focus search        |
-| Ctrl+S (x2) | Shut down        |
+| Key | Action |
+| --- | ------ |
+| n | New entry |
+| r | Rename entry |
+| d | Delete entry |
+| c | Duplicate entry |
+| e | Toggle exports view |
+| / | Focus search |
+| Ctrl+S (x2) | Shut down |
 
 #### Editor
 
-| Key      | Action                               |
-| ——-- | ———————————— |
-| Ctrl+B   | Bold                                 |
-| Ctrl+Down | Go to bottom of document            |
-| Ctrl+F   | Find/Replace                         |
-| Ctrl+G   | Toggle keybindings panel             |
-| Ctrl+I   | Italic                               |
-| Ctrl+N   | Insert blank footnote (`^[]`)        |
-| Ctrl+O   | Citation manager                     |
-| Ctrl+P   | Command palette                      |
-| Ctrl+R   | Insert citation                      |
-| Ctrl+S   | Save                                 |
-| Ctrl+Up  | Go to top of document                |
-| Ctrl+W   | Toggle word/paragraph count          |
-| Esc (x2) | Return to file browser               |
+| Key | Action |
+| --- | ------ |
+| Ctrl+B | Bold |
+| Ctrl+Down | Go to bottom of document |
+| Ctrl+F | Find/Replace |
+| Ctrl+G | Toggle keybindings panel |
+| Ctrl+I | Italic |
+| Ctrl+N | Insert blank footnote (`^[]`) |
+| Ctrl+O | Citation manager |
+| Ctrl+P | Command palette |
+| Ctrl+R | Insert citation |
+| Ctrl+S | Save |
+| Ctrl+Up | Go to top of document |
+| Ctrl+W | Toggle word/paragraph count |
+| Esc (x2) | Return to file browser |
 
 ### Manuscripts Receiver
 Manuscripts Receiver is a companion app to manuscripts that runs on Windows or macOS, and enables you to send digital versions of your .pdf to teachers or peers who are on the same network.
