@@ -65,6 +65,9 @@ This sends the student to the Exports view, on which more below.
 #### Pin
 This feature allows students to pin favorite or current projects to the top of the list for quick access and editing.
 
+#### Export all projects to Markdown (m)
+Pressing m twice on the Projects view will export all projects to Markdown. This is useful when a student graduates to Obsidian or another kind of word processor; in this way, he or she can take all of the work done in Manuscripts. This is the beauty of Markdown being a portable and simple format.
+
 ### Editor view
 
 <img width="800" height="480" alt="manuscripts-20260228-142026" src="https://github.com/user-attachments/assets/f56942d7-2381-40bb-991e-039ea3a3c704" />
