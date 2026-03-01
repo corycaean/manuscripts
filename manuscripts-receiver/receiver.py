@@ -200,6 +200,11 @@ HTML_PAGE = """\
 # ── Config ───────────────────────────────────────────────────────────────────
 
 _CONFIG_FILE = Path.home() / ".config" / "manuscripts" / "receiver.json"
+_OLD_CONFIG_FILE = Path.home() / ".config" / "manuscripts" / "share.json"
+
+# Migrate share.json → receiver.json on first run
+if _OLD_CONFIG_FILE.exists() and not _CONFIG_FILE.exists():
+    _OLD_CONFIG_FILE.rename(_CONFIG_FILE)
 
 
 def _load_config() -> dict:
