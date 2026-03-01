@@ -1,10 +1,10 @@
-name: Release manuscripts-share
+name: Release manuscripts-receiver
 
-# Trigger by pushing a tag like: git tag share-v1.2 && git push origin share-v1.2
+# Trigger by pushing a tag like: git tag receiver-v1.2 && git push origin receiver-v1.2
 on:
   push:
     tags:
-      - 'share-v*'
+      - 'receiver-v*'
 
 jobs:
   build-mac:
@@ -17,11 +17,11 @@ jobs:
           python-version: '3.11'
       - name: Build app
         run: |
-          cd manuscripts-share
+          cd manuscripts-receiver
           pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pyobjc
           python make_icons.py
           pyinstaller --onedir --windowed \
-            --name "manuscripts share" \
+            --name "manuscripts receiver" \
             --icon icon.icns \
             --collect-all zeroconf \
             --collect-all aiohttp \
@@ -30,22 +30,22 @@ jobs:
             --hidden-import tkinter \
             --add-data "JetBrainsMono-Regular.ttf:." \
             --add-data "JetBrainsMono-Light.ttf:." \
-            share.py
+            receiver.py
       - name: Package DMG
         run: |
           TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#share-v}"
-          DMG="manuscripts-share-mac-v${VERSION}.dmg"
-          mkdir manuscripts-share/dist/dmg-staging
-          cp -r "manuscripts-share/dist/manuscripts share.app" "manuscripts-share/dist/dmg-staging/"
-          ln -s /Applications "manuscripts-share/dist/dmg-staging/Applications"
+          VERSION="${TAG#receiver-v}"
+          DMG="manuscripts-receiver-mac-v${VERSION}.dmg"
+          mkdir manuscripts-receiver/dist/dmg-staging
+          cp -r "manuscripts-receiver/dist/manuscripts receiver.app" "manuscripts-receiver/dist/dmg-staging/"
+          ln -s /Applications "manuscripts-receiver/dist/dmg-staging/Applications"
           hdiutil create \
-            -volname "manuscripts share" \
-            -srcfolder "manuscripts-share/dist/dmg-staging" \
+            -volname "manuscripts receiver" \
+            -srcfolder "manuscripts-receiver/dist/dmg-staging" \
             -ov \
             -format UDZO \
-            "manuscripts-share/dist/${DMG}"
-          echo "ASSET=manuscripts-share/dist/${DMG}" >> "$GITHUB_ENV"
+            "manuscripts-receiver/dist/${DMG}"
+          echo "ASSET=manuscripts-receiver/dist/${DMG}" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
           name: mac-build
@@ -61,11 +61,11 @@ jobs:
           python-version: '3.11'
       - name: Build binary
         run: |
-          cd manuscripts-share
+          cd manuscripts-receiver
           pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pywin32
           python make_icons.py
           pyinstaller --onefile --noconsole `
-            "--name" "manuscripts-share" `
+            "--name" "manuscripts-receiver" `
             --icon icon.ico `
             --collect-all zeroconf `
             --collect-all aiohttp `
@@ -74,15 +74,15 @@ jobs:
             --hidden-import tkinter `
             "--add-data" "JetBrainsMono-Regular.ttf;." `
             "--add-data" "JetBrainsMono-Light.ttf;." `
-            share.py
+            receiver.py
       - name: Rename exe
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#share-v}"
-          mv "manuscripts-share/dist/manuscripts-share.exe" \
-             "manuscripts-share/dist/manuscripts-share-win-v${VERSION}.exe"
-          echo "ASSET=manuscripts-share/dist/manuscripts-share-win-v${VERSION}.exe" >> "$GITHUB_ENV"
+          VERSION="${TAG#receiver-v}"
+          mv "manuscripts-receiver/dist/manuscripts-receiver.exe" \
+             "manuscripts-receiver/dist/manuscripts-receiver-win-v${VERSION}.exe"
+          echo "ASSET=manuscripts-receiver/dist/manuscripts-receiver-win-v${VERSION}.exe" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build
@@ -101,14 +101,14 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: manuscripts share ${{ github.ref_name }}
+          name: manuscripts receiver ${{ github.ref_name }}
           body: |
-            ## manuscripts share ${{ github.ref_name }}
+            ## manuscripts receiver ${{ github.ref_name }}
 
-            **macOS**: open the DMG, drag `manuscripts share` to Applications
+            **macOS**: open the DMG, drag `manuscripts receiver` to Applications
             *(first run: right-click → Open to bypass Gatekeeper)*
 
-            **Windows**: double-click `manuscripts-share-win-v*.exe`
+            **Windows**: double-click `manuscripts-receiver-win-v*.exe`
             *(first run: click "More info" → "Run anyway" to bypass SmartScreen)*
 
             A setup dialog will appear on first launch to set your name and password.

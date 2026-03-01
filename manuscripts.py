@@ -3008,7 +3008,7 @@ def create_app(storage):
         except OSError:
             sending.close()
             await show_dialog_as_float(state, AlertDialog(
-                f"Cannot reach {teacher_name}. Is share.py running?"
+                f"Cannot reach {teacher_name}. Is receiver.py running?"
             ))
         except Exception as exc:
             sending.close()

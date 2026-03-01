@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-manuscripts-share — receives PDF submissions from peers over LAN.
+manuscripts-receiver — receives PDF submissions from peers over LAN.
 
 A system-tray GUI app (macOS and Windows) that receives PDF submissions
 from manuscripts.py and shows them in a browser dashboard.
@@ -128,7 +128,7 @@ HTML_PAGE = """\
   <header>
     <h1>manuscripts</h1>
     <span class="header-sep">·</span>
-    <span id="status">submissions</span>
+    <span id="status">receiver</span>
   </header>
   <table id="table" style="display:none">
     <thead>
@@ -140,7 +140,7 @@ HTML_PAGE = """\
     </thead>
     <tbody id="tbody"></tbody>
   </table>
-  <div id="empty">No submissions yet.</div>
+  <div id="empty">No submissions received yet.</div>
 
   <footer>
     <span>teacher: <strong>{teacher_name}</strong></span>
@@ -175,7 +175,7 @@ HTML_PAGE = """\
         tbody.prepend(tr);
         status.textContent = d.student + ' submitted \u201c' + d.title + '\u201d';
         status.className = 'active';
-        setTimeout(() => {{ status.textContent = 'submissions'; status.className = ''; }}, 4000);
+        setTimeout(() => {{ status.textContent = 'receiver'; status.className = ''; }}, 4000);
       }});
 
       es.addEventListener('count', e => {{
@@ -199,7 +199,7 @@ HTML_PAGE = """\
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-_CONFIG_FILE = Path.home() / ".config" / "manuscripts" / "share.json"
+_CONFIG_FILE = Path.home() / ".config" / "manuscripts" / "receiver.json"
 
 
 def _load_config() -> dict:
@@ -249,7 +249,7 @@ def show_setup_dialog() -> tuple[str, str] | None:
     result: list[tuple[str, str] | None] = [None]
 
     root = tk.Tk()
-    root.title("manuscripts-share")
+    root.title("manuscripts-receiver")
     root.resizable(False, False)
 
     # Center on screen
@@ -755,9 +755,9 @@ def main() -> None:
 
     # Run system tray icon on main thread (blocks until Quit)
     _tray_icon = pystray.Icon(
-        "manuscripts-share",
+        "manuscripts-receiver",
         _make_icon_image(),
-        "manuscripts-share",
+        "manuscripts-receiver",
         menu=_make_menu(),
     )
     _tray_icon.run(_setup_tray)
