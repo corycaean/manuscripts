@@ -27,7 +27,7 @@ The Projects view offers a list of *projects*, which are JSON files that contain
 Most of the shortcuts on the projects view are self-explanatory, so I'm just going to run through the few that I think need a little bit of explanation in the order in which they appear from top to bottom and left to right.
 
 #### Shut down (ctrl+s)
-Manuscripts is designed to be the writerdeck OS, if you want to think about it with that metaphor in mind. A student might spend all of their time with the device in this app. For simplicity's sake, I wanted them to be able to shut down without exiting to CLI, so I set up a double press of ctrl+s to do the job. (*N*.*b*., this only works if you have auto-login set up on the device, because all it does is run 'sudo shutdown now'.)
+Manuscripts is designed to be the writerdeck OS, if you want to think about it with that metaphor in mind. A student might spend all of their time with the device in this app. For simplicity's sake, I wanted them to be able to shut down without exiting to CLI, so I set up a double press of ctrl+s to do the job. (*N*.*b*., this only works if you have auto-login set up on the device, because all it does is run `sudo shutdown now`.)
 
 #### Search
 At first, this isn't useful, but a fuzzy search that allows students to find old projects seems to me an essential addition. If a student uses Manuscripts over a number of years and classes, this becomes invaluable.
@@ -66,7 +66,7 @@ This opens a panel on the right that serves as a guide for the app keybindings. 
 
 <img width="800" height="480" alt="manuscripts-20260228-142109" src="https://github.com/user-attachments/assets/d6225041-0613-47a3-824c-fdf2c5cd5394" />
 
-#### Invoke command palette
+#### Invoke command palette (ctrl+p)
 The most powerful feature of the Editor view is the command palette, pictured below:
 
 <img width="800" height="480" alt="manuscripts-20260228-142032" src="https://github.com/user-attachments/assets/a6bf8ddf-37dc-4c2d-b6de-463b9ab68ef4" />
@@ -90,7 +90,7 @@ This option, which can be triggered from the palette, inserts a bibliography of 
 Ctrl+n offers a quick and frictionless way to insert an inline markdown footnote.
 
 #### Insert frontmatter (palette only)
-This will insert at the top of the document the frontmatter relevant to the export function. I reckon title, author, instructor, and date are pretty self-explanatory. Style accepts one of two case sensitive inputs: "chicago" and "mla". Spacing, likewise, accepts "single" or "double". Students can also add their own frontmatter elements, the most relevant of which might be "bibliography", "csl", and "tags".
+This will insert at the top of the document the frontmatter relevant to the export function. I reckon title, author, instructor, and date are pretty self-explanatory. Style accepts one of two case sensitive inputs: `chicago` and `mla`. Spacing, likewise, accepts `single` or `double`. Students can also add their own frontmatter elements, the most relevant of which might be "bibliography", "csl", and "tags".
 
 ##### Example
 
@@ -223,6 +223,6 @@ If a password has been set, the student will have an opportunity to enter it; an
 git clone https://github.com/charleskcisco/manuscripts.git
 chmod +x app-setup.sh device-setup.sh run.sh
 ./app-setup.sh     # installs system packages, creates venv, installs Python dependencies
-./device-setup.sh  # configures auto-login, start script, and terminal settings—**optional**
+./device-setup.sh  # configures auto-login, start script, and terminal settings (optional)
 ./run.sh           # launches manuscripts
 ```
