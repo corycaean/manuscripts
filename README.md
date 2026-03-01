@@ -9,33 +9,6 @@ Until now, one of the most significant hurdles to teaching those skills has been
 
 Thus, Manuscripts was born. Designed to facilitate the transmission of the skills of invention, arrangement, and style, it is barebones in the best way. It depends upon Markdown, the plaintext syntax that offers everything needed for digital composition in a lightweight, portable format. Using my own training in research and composition, I designed a lightweight citation manager that teaches students to rely on sources without overwhelming them. Finally, Manuscripts has an export pipeline dependent on open source and free software that gives students the properly, academically formatted .pdf they need without wasting their time formatting. Since they don't have to bear the cognitive load of *design*, they can focus their energy on *composition*.
 
-## Dependencies
-
-### System packages
-- pandoc
-- libreoffice
-- cups, cups-client
-- cage, foot (Wayland compositor and terminal)
-- aspell
-- fonts-jetbrains-mono
-- ttf-mscorefonts-installer
-
-### Python (3.9+)
-- prompt_toolkit
-- pygments
-- aiohttp
-- zeroconf
-
-## First-time use
-
-```bash
-git clone https://github.com/charleskcisco/manuscripts.git
-chmod +x app-setup.sh device-setup.sh run.sh
-./app-setup.sh     # installs system packages, creates venv, installs Python dependencies
-./device-setup.sh  # configures auto-login, start script, and terminal settings
-./run.sh           # launches manuscripts
-```
-
 ## Specifics
 Manuscripts has a few views, each of which offers distinct features.
 
@@ -226,3 +199,30 @@ Students can then designate the receiver on their writerdeck.
 If a password has been set, the student will have an opportunity to enter it; and then the receiver app will receive the file.
 
 <img width="1146" height="1108" alt="image" src="https://github.com/user-attachments/assets/275f6c15-2b68-4500-8828-9af2cab867dc" />
+
+## Dependencies
+
+### System packages
+- pandoc
+- libreoffice
+- cups, cups-client
+- cage, foot (Wayland compositor and terminal)
+- aspell
+- fonts-jetbrains-mono
+- ttf-mscorefonts-installer
+
+### Python (3.9+)
+- prompt_toolkit
+- pygments
+- aiohttp
+- zeroconf
+
+## First-time use
+
+```bash
+git clone https://github.com/charleskcisco/manuscripts.git
+chmod +x app-setup.sh device-setup.sh run.sh
+./app-setup.sh     # installs system packages, creates venv, installs Python dependencies
+./device-setup.sh  # configures auto-login, start script, and terminal settings—**optional**
+./run.sh           # launches manuscripts
+```
