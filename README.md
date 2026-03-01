@@ -1,7 +1,7 @@
 # Manuscripts—a writing appliance for students
 
 ## About
-I designed Manuscripts for high school students. As a student myself, and now as a teacher, the aspect of writing that has puzzled me the most is the relative lack of  talk about the tools that constrain the process. No one, I think, ranks Microsoft Word as a well-designed tool (and I personally hate it [as much as Charlie Stross does](https://www.antipope.org/charlie/blog-static/2013/10/why-microsoft-word-must-die.html)). The tools that ape its design—Google Docs, Apple Pages, LibreOffice—fare little better. The what-you-see-is-what-you-get text editor exists in a perpetual and probably inevitable state of bland badness. The reason is simple: their interfaces are complex, confusing, and ultimately not aimed at document *composition* so much as document *design*.
+I designed Manuscripts for high school students. As a student myself, and now as a teacher, the aspect of writing that has puzzled me the most is the relative lack of talk about the tools that constrain the process. No one, I think, ranks Microsoft Word as a well-designed tool (and I personally hate it [as much as Charlie Stross does](https://www.antipope.org/charlie/blog-static/2013/10/why-microsoft-word-must-die.html)). The tools that ape its design—Google Docs, Apple Pages, LibreOffice—fare little better. The what-you-see-is-what-you-get text editor exists in a perpetual and probably inevitable state of bland badness. The reason is simple: their interfaces are complex, confusing, and ultimately not aimed at document *composition* so much as document *design*.
 
 There's a place for that, but the longer I teach the more I am persuaded that the classroom is not that place. My job as a teacher is to convey the skills I have: research and formatting, yes, but also brainstorming, organization, prose construction and revision, citation; or, in the language of antiquity and the middle ages: invention, arrangement, and style. If I can teach kids those skills, and so to write and write well, those skills are transferable into any software.
 
@@ -134,7 +134,7 @@ csl: /home/username/documents/sources/chicago.csl
 - **spacing**: `single`, `double`
 - **style**: `chicago` (Turabian cover page) or `mla` (MLA header)
 - **bibliography**: path to `.bib` file (enables `--citeproc` during export)
-- **csl**: path to `.*csl` file
+- **csl**: path to `.csl` file
 
 #### Search for and insert reference (ctrl+r)
 This will open a pop-up from which students can fuzzy search their project's sources and insert a full footnote citation. Combined with the bibliography feature, this deals with all of the citation work a high school student might need to do.
@@ -167,10 +167,10 @@ From the exports view, students may see and search .md, .docx, and .pdf files th
 <img width="800" height="480" alt="manuscripts-20260228-142015" src="https://github.com/user-attachments/assets/2801a450-518c-447f-8019-1ad09c9d6e1a" />
 
 #### Submit to Teacher
- Using the Manuscripts Receiver app, which is on the GitHub, students may send PDFs to PCs on the same network from their writerdecks. I'll talk about the Manuscripts Receiver app a little more below.
+ Using the Manuscripts Receiver app, which is on GitHub, students may send PDFs to PCs on the same network from their writerdecks. I'll talk about the Manuscripts Receiver app a little more below.
 
 #### Print
-Students may also print to network printers from the export screen
+Students may also print to network printers from the export screen.
 
 ### Keyboard shortcuts in brief
 
@@ -184,6 +184,7 @@ Students may also print to network printers from the export screen
 | c | Duplicate entry |
 | e | Toggle exports view |
 | / | Focus search |
+| m (x2) | Export all as Markdown |
 | Ctrl+S (x2) | Shut down |
 
 #### Editor
