@@ -222,6 +222,3 @@ Students can then designate the receiver on their writerdeck.
 If a password has been set, the student will have an opportunity to enter it; and then the receiver app will receive the file.
 
 <img width="1146" height="1108" alt="image" src="https://github.com/user-attachments/assets/275f6c15-2b68-4500-8828-9af2cab867dc" />
-
-## Plug
-If you find my work helpful, please consider [buying me a beer](https://buymeacoffee.com/charlescisco).
