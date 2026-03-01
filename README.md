@@ -170,7 +170,7 @@ From the exports view, students may see and search .md, .docx, and .pdf files th
 <img width="800" height="480" alt="manuscripts-20260228-142015" src="https://github.com/user-attachments/assets/2801a450-518c-447f-8019-1ad09c9d6e1a" />
 
 #### Submit to Teacher
- Using the Manuscripts Receiver app, which is on GitHub, students may send PDFs to PCs on the same network from their writerdecks. I'll talk about the Manuscripts Receiver app a little more below.
+Using the Manuscripts Receiver app, which is on GitHub, students may send PDFs to PCs on the same network from their writerdecks. I'll talk about the Manuscripts Receiver app a little more below.
 
 #### Print
 Students may also print to network printers from the export screen.
