@@ -108,7 +108,7 @@ class Source:
     def to_chicago_footnote(self, page: str = "") -> str:
         a = self._author_first()
         if self.source_type == "book":
-            c = f"{a}, *{self.title}*"
+            c = f"{a}, *{self.title}*" if a else f"*{self.title}*"
             if self.publisher:
                 c += f" ({self.publisher}, {self.year})"
             elif self.year:
@@ -117,7 +117,8 @@ class Source:
                 c += f", {page}"
             return c + "."
         if self.source_type == "article":
-            c = f'{a}, "{self.title}," *{self.journal}*'
+            c = f'{a}, "{self.title},"' if a else f'"{self.title},"'
+            c += f" *{self.journal}*"
             if self.volume:
                 c += f" {self.volume}"
                 if self.issue:
@@ -130,7 +131,8 @@ class Source:
                 c += f": {page}"
             return c + "."
         if self.source_type == "book_section":
-            c = f'{a}, "{self.title}," in *{self.book_title}*'
+            c = f'{a}, "{self.title},"' if a else f'"{self.title},"'
+            c += f" in *{self.book_title}*"
             if self.editor:
                 c += f", ed. {self.editor}"
             if self.publisher:
@@ -143,7 +145,7 @@ class Source:
                 c += f", {page}"
             return c + "."
         if self.source_type == "website":
-            c = f'{a}, "{self.title},"'
+            c = f'{a}, "{self.title},"' if a else f'"{self.title},"'
             if self.site_name:
                 c += f" *{self.site_name}*,"
             if self.access_date:
@@ -151,19 +153,22 @@ class Source:
             if self.url:
                 c += f" {self.url}"
             return c.rstrip(",") + "."
-        return f"{a}, *{self.title}* ({self.year})."
+        if a:
+            return f"{a}, *{self.title}* ({self.year})."
+        return f"*{self.title}* ({self.year})."
 
     def to_chicago_bibliography(self) -> str:
         a = self._author_last()
         if self.source_type == "book":
-            c = f"{a}. *{self.title}*."
+            c = f"{a}. *{self.title}*." if a else f"*{self.title}*."
             if self.publisher:
                 c += f" {self.publisher}, {self.year}."
             elif self.year:
                 c += f" {self.year}."
             return c
         if self.source_type == "article":
-            c = f'{a}. "{self.title}." *{self.journal}*'
+            c = f'{a}. "{self.title}."' if a else f'"{self.title}."'
+            c += f" *{self.journal}*"
             if self.volume:
                 c += f" {self.volume}"
                 if self.issue:
@@ -174,7 +179,8 @@ class Source:
                 c += f": {self.pages}"
             return c + "."
         if self.source_type == "book_section":
-            c = f'{a}. "{self.title}." In *{self.book_title}*'
+            c = f'{a}. "{self.title}."' if a else f'"{self.title}."'
+            c += f" In *{self.book_title}*"
             if self.editor:
                 c += f", edited by {self.editor}"
             if self.pages:
@@ -186,7 +192,7 @@ class Source:
                 c += f" {self.year}."
             return c
         if self.source_type == "website":
-            c = f'{a}. "{self.title}."'
+            c = f'{a}. "{self.title}."' if a else f'"{self.title}."'
             if self.site_name:
                 c += f" *{self.site_name}*."
             if self.access_date:
@@ -194,7 +200,9 @@ class Source:
             if self.url:
                 c += f" {self.url}."
             return c
-        return f"{a}. *{self.title}*. {self.year}."
+        if a:
+            return f"{a}. *{self.title}*. {self.year}."
+        return f"*{self.title}*. {self.year}."
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -1459,23 +1467,38 @@ def _detect_printers():
 _clip_copy_cmd = None
 _clip_paste_cmd = None
 
-for _cmd in [["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"]]:
-    if shutil.which(_cmd[0]):
-        _clip_copy_cmd = _cmd
-        break
 
-for _cmd in [["pbpaste"], ["wl-paste", "--no-newline"], ["xclip", "-selection", "clipboard", "-o"]]:
-    if shutil.which(_cmd[0]):
-        _clip_paste_cmd = _cmd
-        break
+def _detect_clipboard():
+    global _clip_copy_cmd, _clip_paste_cmd
+    if sys.platform == "darwin":
+        candidates = [(["/usr/bin/pbcopy"], ["/usr/bin/pbpaste"])]
+    else:
+        candidates = [
+            (["wl-copy"], ["wl-paste", "--no-newline"]),
+            (["xclip", "-selection", "clipboard"],
+             ["xclip", "-selection", "clipboard", "-o"]),
+        ]
+    for copy_cmd, paste_cmd in candidates:
+        try:
+            r = subprocess.run(copy_cmd, input="", text=True, timeout=2,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if r.returncode == 0:
+                _clip_copy_cmd = copy_cmd
+                _clip_paste_cmd = paste_cmd
+                return
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+
+
+_detect_clipboard()
 
 
 def _clipboard_copy(text):
     """Copy text to system clipboard."""
     if _clip_copy_cmd:
         try:
-            subprocess.run(_clip_copy_cmd, input=text, text=True, timeout=2)
-            return True
+            result = subprocess.run(_clip_copy_cmd, input=text, text=True, timeout=2)
+            return result.returncode == 0
         except subprocess.TimeoutExpired:
             return False
     return False
@@ -1838,7 +1861,9 @@ class CitePickerDialog:
 
     def _update_results(self, query):
         self.filtered = fuzzy_filter(self.all_sources, query)
-        items = [(s.id, f"{s.author} ({s.year}) \u2014 {s.title}")
+        items = [(s.id,
+                  f"{s.author} ({s.year}) \u2014 {s.title}" if s.author
+                  else s.title)
                  for s in self.filtered]
         self.results.set_items(items)
         self.results.selected_index = 0
@@ -1989,7 +2014,7 @@ class SourceFormDialog:
         for field_key, _ in SOURCE_FIELDS[self.current_type]:
             buf = self.field_inputs.get((self.current_type, field_key))
             data[field_key] = buf.text.strip() if buf else ""
-        if not data.get("author") or not data.get("title"):
+        if not data.get("title"):
             return
         source = Source(
             id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
@@ -2131,7 +2156,9 @@ class SourcesDialog:
                 ("__empty__", "No sources yet \u2014 press a to add one.")])
         else:
             self.source_list.set_items([
-                (s.id, f"{s.author} ({s.year}) \u2014 {s.title}")
+                (s.id,
+                 f"{s.author} ({s.year}) \u2014 {s.title}" if s.author
+                 else s.title)
                 for s in sources
             ])
 
@@ -2268,7 +2295,9 @@ class ImportSourcesDialog:
             self.list.set_items([("__empty__", "No sources in this manuscript.")])
         else:
             self.list.set_items([
-                (s.id, f"{s.author} ({s.year}) \u2014 {s.title}")
+                (s.id,
+                 f"{s.author} ({s.year}) \u2014 {s.title}" if s.author
+                 else s.title)
                 for s in self._sources
             ])
         self.list.selected_index = 0
@@ -3104,8 +3133,10 @@ def create_app(storage):
                 start, end = end, start
             selected = buf.text[start:end]
             if selected:
-                _clipboard_copy(selected)
-                show_notification(state, "Copied.")
+                if _clipboard_copy(selected):
+                    show_notification(state, "Copied.")
+                else:
+                    show_notification(state, "Clipboard unavailable.")
             buf.exit_selection()
 
     @_editor_cb_kb.add("c-a")
@@ -4304,6 +4335,20 @@ def create_app(storage):
     @kb.add("escape", filter=is_editor & no_float & editor_has_selection)
     def _(event):
         editor_area.buffer.exit_selection()
+
+    @kb.add("<any>", filter=is_editor & no_float & editor_has_selection)
+    def _(event):
+        ch = event.data
+        if not ch or not ch.isprintable():
+            return
+        buf = editor_area.buffer
+        start = buf.selection_state.original_cursor_position
+        end = buf.cursor_position
+        if start > end:
+            start, end = end, start
+        buf.exit_selection()
+        buf.set_document(Document(buf.text[:start] + ch + buf.text[end:],
+                                  start + len(ch)), bypass_readonly=True)
 
     @kb.add("f12")
     def _(event):
