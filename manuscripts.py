@@ -3260,7 +3260,7 @@ def create_app(storage):
     ])
 
     exports_hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (/) search  ·  (m) manuscripts  (d) delete  (s) submit")])
+        lambda: [("class:hint", " (/) search  ·  (d) delete  (p) print  (s) submit")])
     exports_hints_window = Window(content=exports_hints_control, height=1)
 
     exports_view = HSplit([
@@ -3269,7 +3269,11 @@ def create_app(storage):
                 ("fg:#e0af68 bold", " manuscripts"),
                 ("class:hint", "  ·  exports"),
             ]), height=1, dont_extend_height=True),
-            Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
+            Window(content=FormattedTextControl(lambda: [
+                ("class:hint", "(m) manuscripts "),
+                ("class:hint.sep", " · "),
+            ] + _get_shutdown_hint()),
+                height=1, align=WindowAlign.RIGHT),
         ]),
         Window(height=1, char="─", style="class:hint"),
         export_list,
@@ -3938,6 +3942,30 @@ def create_app(storage):
             show_notification(state, "Only PDF files can be submitted.")
             return
         asyncio.ensure_future(_do_submit(path))
+
+    @kb.add("p", filter=projects_list_focused)
+    def _(event):
+        if not state.showing_exports:
+            return
+        idx = export_list.selected_index
+        if idx >= len(state.export_paths):
+            return
+        path = state.export_paths[idx]
+        if path.suffix.lower() != ".pdf":
+            show_notification(state, "Only PDF files can be printed.")
+            return
+        printers = _detect_printers()
+        if not printers:
+            show_notification(state, "No printers found.")
+            return
+
+        async def _do_print():
+            dlg = PrinterPickerDialog(printers, path)
+            result = await show_dialog_as_float(state, dlg)
+            if result:
+                show_notification(state, f"Sent to {result}.")
+
+        asyncio.ensure_future(_do_print())
 
     @kb.add("c", filter=projects_list_focused)
     def _(event):
