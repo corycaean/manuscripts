@@ -3873,18 +3873,19 @@ def create_app(storage):
     def _(event):
         if state.showing_exports:
             return
-        filtered = fuzzy_filter_projects(state.projects, project_search.text)
         idx = project_list.selected_index
-        if idx >= len(filtered):
+        if idx >= len(project_list.items):
             return
-        project = filtered[idx]
+        pid, _ = project_list.items[idx]
+        if pid == "__empty__":
+            return
 
         async def _do():
             dlg = InputDialog(title="Rename", label_text="New name:",
                               initial="", ok_text="Rename")
             new_name = await show_dialog_as_float(state, dlg)
             if new_name:
-                p = state.storage.load_project(project.id)
+                p = state.storage.load_project(pid)
                 if p:
                     p.name = new_name
                     state.storage.save_project(p)
@@ -3914,11 +3915,15 @@ def create_app(storage):
 
             asyncio.ensure_future(_do())
             return
-        filtered = fuzzy_filter_projects(state.projects, project_search.text)
         idx = project_list.selected_index
-        if idx >= len(filtered):
+        if idx >= len(project_list.items):
             return
-        project = filtered[idx]
+        pid, _ = project_list.items[idx]
+        if pid == "__empty__":
+            return
+        project = state.storage.load_project(pid)
+        if not project:
+            return
 
         async def _do():
             dlg = ConfirmDialog(f"Delete '{project.name}'?")
@@ -3971,12 +3976,13 @@ def create_app(storage):
     def _(event):
         if state.showing_exports:
             return
-        filtered = fuzzy_filter_projects(state.projects, project_search.text)
         idx = project_list.selected_index
-        if idx >= len(filtered):
+        if idx >= len(project_list.items):
             return
-        source = filtered[idx]
-        loaded = state.storage.load_project(source.id)
+        pid, _ = project_list.items[idx]
+        if pid == "__empty__":
+            return
+        loaded = state.storage.load_project(pid)
         if not loaded:
             return
         copy = state.storage.create_project(f"{loaded.name} (copy)")
