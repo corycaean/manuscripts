@@ -222,7 +222,20 @@ def _save_config(cfg: dict) -> None:
 # ── Network helpers ──────────────────────────────────────────────────────────
 
 def _get_local_ip() -> str:
-    """Return the primary LAN IP (not 127.0.0.1)."""
+    """Return the primary LAN IP, preferring physical interfaces over VPN tunnels."""
+    # Use ifaddr (bundled with zeroconf) to find a physical interface IP.
+    try:
+        import ifaddr
+        _VPN_PREFIXES = ("lo", "utun", "tun", "tap", "ppp", "ipsec", "gif", "stf")
+        for adapter in ifaddr.get_adapters():
+            if adapter.name.startswith(_VPN_PREFIXES):
+                continue
+            for ip in adapter.ips:
+                if isinstance(ip.ip, str) and not ip.ip.startswith("127."):
+                    return ip.ip
+    except Exception:
+        pass
+    # Fall back to routing trick.
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
