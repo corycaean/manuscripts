@@ -4026,7 +4026,7 @@ def create_app(storage):
             if len(combined_name) > 80:
                 combined_name = combined_name[:77] + "..."
             rename_dlg = InputDialog(title="Join", label_text="Name for joined manuscript:",
-                                     initial=combined_name, ok_text="Create")
+                                     initial="", ok_text="Create")
             final_name = await show_dialog_as_float(state, rename_dlg)
             if not final_name:
                 return
