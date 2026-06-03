@@ -4,15 +4,29 @@
 # Usage:
 #   ./run.sh                    # normal run
 #   MANUSCRIPTS_DATA=~/essays ./run.sh   # custom data directory
-
-set -e
+#
+# Exit code 42 means the app requested a self-update. Pull, re-run setup,
+# and relaunch. Any other exit code exits this script as-is.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Prefer venv if it exists
 if [ -f "${SCRIPT_DIR}/.venv/bin/python3" ]; then
-    exec "${SCRIPT_DIR}/.venv/bin/python3" "${SCRIPT_DIR}/manuscripts.py" "$@"
+    PYTHON="${SCRIPT_DIR}/.venv/bin/python3"
+else
+    PYTHON="python3"
 fi
 
-# Fall back to system python (prompt_toolkit must be installed)
-exec python3 "${SCRIPT_DIR}/manuscripts.py" "$@"
+while true; do
+    "${PYTHON}" "${SCRIPT_DIR}/manuscripts.py" "$@"
+    EXIT_CODE=$?
+    if [ "${EXIT_CODE}" -eq 42 ]; then
+        echo "Update requested — pulling latest changes..."
+        git -C "${SCRIPT_DIR}" pull --ff-only || true
+        if [ -f "${SCRIPT_DIR}/app-setup.sh" ]; then
+            bash "${SCRIPT_DIR}/app-setup.sh" || true
+        fi
+        echo "Restarting..."
+    else
+        exit "${EXIT_CODE}"
+    fi
+done

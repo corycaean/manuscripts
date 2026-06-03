@@ -1371,6 +1371,8 @@ class AppState:
         self.shutdown_pending = 0.0
         self.pinned_projects: set[str] = set(_load_config().get("pinned", []))
         self.student_name: str = _load_config().get("student_name", "")
+        self.update_available = False
+        self.update_pending = 0.0
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1392,6 +1394,34 @@ def show_notification(state, message, duration=3.0):
             get_app().invalidate()
 
     state.notification_task = asyncio.ensure_future(_clear())
+
+
+async def check_for_update(state):
+    """Background task: silently check if new commits are available upstream.
+    Sets state.update_available if HEAD is behind @{u}. No-ops when offline,
+    not in a git repo, or MANUSCRIPTS_NO_UPDATE_CHECK is set."""
+    import os as _os
+    if _os.environ.get("MANUSCRIPTS_NO_UPDATE_CHECK"):
+        return
+    script_dir = Path(__file__).parent
+    if not (script_dir / ".git").exists():
+        return
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, lambda: subprocess.run(
+            ["git", "-C", str(script_dir), "fetch"],
+            capture_output=True, timeout=10,
+        ))
+        result = await loop.run_in_executor(None, lambda: subprocess.run(
+            ["git", "-C", str(script_dir), "rev-list", "--count", "HEAD..@{u}"],
+            capture_output=True, text=True, timeout=5,
+        ))
+        count = int(result.stdout.strip()) if result.returncode == 0 else 0
+        if count > 0:
+            state.update_available = True
+            get_app().invalidate()
+    except Exception:
+        pass
 
 
 async def show_dialog_as_float(state, dialog):
@@ -1460,20 +1490,31 @@ async def _discover_teachers(timeout: float = 3.0) -> list:
 
 
 def _detect_printers():
-    """Return list of available printer names via lpstat."""
+    """Return list of available printer names via lpstat.
+    Tries -e (all configured destinations) first, falls back to -a."""
+    for flag in ("-e", "-a"):
+        try:
+            r = subprocess.run(
+                ["lpstat", flag], capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return [
+                    line.split()[0]
+                    for line in r.stdout.strip().splitlines()
+                    if line.split()
+                ]
+        except Exception:
+            pass
+    return []
+
+
+def _ensure_writable(path: "Path") -> None:
+    """Create dir if needed and ensure owner has rwx (guards against 0555 dirs)."""
+    path.mkdir(parents=True, exist_ok=True)
     try:
-        result = subprocess.run(
-            ["lpstat", "-a"], capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return []
-        return [
-            line.split()[0]
-            for line in result.stdout.strip().splitlines()
-            if line.split()
-        ]
-    except Exception:
-        return []
+        path.chmod(path.stat().st_mode | 0o700)
+    except OSError:
+        pass
 
 
 _clip_copy_cmd = None
@@ -1538,11 +1579,16 @@ def _clipboard_copy(text):
 
 
 def _clipboard_paste():
-    """Get text from system clipboard. Re-detects and retries once on failure."""
+    """Get text from system clipboard.
+    If no paste tool was ever detected, run detection first.
+    On failure retry with the same command — do NOT re-detect, because
+    _detect_clipboard() probes by writing an empty string which would
+    clobber whatever the user was trying to paste."""
+    if _clip_paste_cmd is None:
+        _detect_clipboard()
     result = _try_paste()
     if result is not None:
         return result
-    _detect_clipboard()
     return _try_paste()
 
 
@@ -1820,6 +1866,17 @@ class MarkdownCheatSheetDialog:
             focusable=True,
             height=D(preferred=24, max=32),
         )
+
+        # TextArea's BufferControl swallows escape; attach local bindings so
+        # escape/q close the dialog without tabbing to the Close button first.
+        _cs_kb = KeyBindings()
+
+        @_cs_kb.add("escape", eager=True)
+        @_cs_kb.add("q")
+        def _kb_close(event):
+            _close()
+
+        self.body.control.key_bindings = _cs_kb
 
         self.dialog = Dialog(
             title="Markdown Cheat Sheet",
@@ -3358,15 +3415,6 @@ def create_app(storage):
             return
         path = Path(path_str)
 
-        def _open_in_os():
-            try:
-                if sys.platform == "darwin":
-                    subprocess.Popen(["open", str(path)])
-                else:
-                    subprocess.Popen(["xdg-open", str(path)])
-            except Exception:
-                pass
-
         if path.suffix.lower() == ".pdf":
             async def _show():
                 try:
@@ -3387,7 +3435,7 @@ def create_app(storage):
                     show_notification(state, f"Error: {type(exc).__name__}: {str(exc)[:50]}")
             asyncio.ensure_future(_show())
         else:
-            _open_in_os()
+            show_notification(state, "Only PDF files can be printed or submitted.")
 
     export_list.on_select = open_export
 
@@ -3439,6 +3487,10 @@ def create_app(storage):
     def get_projects_status_text():
         if state.notification:
             return [("class:status", f" {state.notification}")]
+        if state.update_available:
+            return [("class:hint", " update available  "),
+                    ("class:hint.sep", "·"),
+                    ("class:hint", "  ^u to install")]
         return [("class:status", "")]
 
     projects_screen = HSplit([
@@ -3666,6 +3718,7 @@ def create_app(storage):
             show_notification(state, "No reference .docx found in refs/ directory.")
             return
 
+        await loop.run_in_executor(None, lambda: _ensure_writable(export_dir))
         md_path = export_dir / f"{project.id}.md"
         lua_path = export_dir / f"{project.id}_filter.lua"
         docx_path = export_dir / f"{safe_name}.docx"
@@ -3689,8 +3742,10 @@ def create_app(storage):
             result = await loop.run_in_executor(
                 None, lambda: subprocess.run(
                     pandoc_args, capture_output=True, text=True, timeout=60))
-            if result.returncode != 0:
-                show_notification(state, "Export failed: pandoc error")
+            if result.returncode != 0 or not docx_path.exists():
+                err = (result.stderr.strip()[-200:] if result.stderr.strip()
+                       else "no output file")
+                show_notification(state, f"Export failed (pandoc): {err}")
                 return
 
             steps = "2/3" if export_format == "pdf" else "2/2"
@@ -3706,15 +3761,20 @@ def create_app(storage):
                 return
 
             show_notification(state, "Exporting\u2026 (3/3) Converting to PDF", duration=60)
+            lo_profile = Path(tempfile.mkdtemp()) / "loprofile"
             lo_args = [
-                libreoffice, "--headless", "--convert-to", "pdf",
+                libreoffice, "--headless", "--norestore",
+                f"-env:UserInstallation=file://{lo_profile}",
+                "--convert-to", "pdf",
                 "--outdir", str(export_dir), str(docx_path),
             ]
             result = await loop.run_in_executor(
                 None, lambda: subprocess.run(
-                    lo_args, capture_output=True, text=True, timeout=60))
-            if result.returncode != 0:
-                show_notification(state, "Export failed: LibreOffice error")
+                    lo_args, capture_output=True, text=True, timeout=120))
+            if result.returncode != 0 or not pdf_path.exists():
+                err = (result.stderr.strip()[-200:] if result.stderr.strip()
+                       else "no output file")
+                show_notification(state, f"Export failed (LibreOffice): {err}")
                 return
             show_notification(state, f"Exported: {pdf_path.name}")
 
@@ -4261,6 +4321,17 @@ def create_app(storage):
         else:
             state.shutdown_pending = now
             show_notification(state, "Press ^s again to shut down.", duration=2.0)
+
+    @kb.add("c-u", filter=is_projects & no_float)
+    def _(event):
+        if not state.update_available:
+            return
+        now = time.monotonic()
+        if now - state.update_pending < 2.0:
+            event.app.exit(result="update")
+        else:
+            state.update_pending = now
+            show_notification(state, "Press ^u again to update and restart.", duration=2.0)
 
     # -- Editor screen --
     @kb.add("c-s", filter=is_editor & no_float)
@@ -4847,6 +4918,7 @@ def create_app(storage):
         mouse_support=False,
     )
     app.ttimeoutlen = 0.05
+    app._state = state
 
     return app
 
@@ -4873,8 +4945,16 @@ def main() -> None:
     except (ImportError, AttributeError, termios.error):
         pass
 
-    app = create_app(Storage(data_dir))
-    app.run()
+    storage = Storage(data_dir)
+    app = create_app(storage)
+
+    async def _run():
+        asyncio.ensure_future(check_for_update(app._state))
+        return await app.run_async()
+
+    result = asyncio.run(_run())
+    if result == "update":
+        sys.exit(42)
 
 
 if __name__ == "__main__":
